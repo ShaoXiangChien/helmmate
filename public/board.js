@@ -23,6 +23,7 @@ const state = {
   launchPreviewById: new Map(),
   readyOnly: false,
   config: null,
+  importPrompt: "",
 };
 
 // ---------- helpers ----------
@@ -551,6 +552,63 @@ async function createBoardStarterTicket() {
   openCreateTicketPanel();
 }
 
+function defaultImportDraft() {
+  return {
+    notes: "",
+    contextRefs: "",
+    createImmediately: true,
+  };
+}
+
+function importPromptText() {
+  return state.importPrompt || "";
+}
+
+async function generateImportNotesPrompt(btn, copy = false) {
+  const notes = $("#import-notes-text")?.value.trim() || "";
+  const contextRefs = $("#import-context-refs")?.value || "";
+  const createImmediately = !!$("#import-create-immediately")?.checked;
+  if (!notes) {
+    state.importPrompt = "";
+    openImportNotesPanel({ notes, contextRefs, createImmediately }, { notes: "Paste notes before generating a prompt." });
+    return;
+  }
+  if (btn) btn.disabled = true;
+  state.importPrompt = "";
+  try {
+    const res = await fetch("/api/import/notes-prompt", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ notes, contextRefs, createImmediately }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `Prompt failed (${res.status})`);
+    state.importPrompt = data.prompt || "";
+    openImportNotesPanel({ notes, contextRefs, createImmediately });
+    if (copy) {
+      await navigator.clipboard.writeText(importPromptText());
+      toast("Import prompt copied");
+    } else {
+      toast("Import prompt generated");
+    }
+  } catch (err) {
+    openImportNotesPanel({ notes, contextRefs, createImmediately }, { form: err.message });
+  }
+  if (btn) btn.disabled = false;
+}
+
+async function copyImportNotesPrompt(btn) {
+  if (!importPromptText()) return generateImportNotesPrompt(btn, true);
+  if (btn) btn.disabled = true;
+  try {
+    await navigator.clipboard.writeText(importPromptText());
+    toast("Import prompt copied");
+  } catch (err) {
+    toast(`Could not copy import prompt: ${err.message}`);
+  }
+  if (btn) btn.disabled = false;
+}
+
 async function copyBoardSetupPrompt() {
   try {
     const res = await fetch("/api/setup/agent-prompt", {
@@ -629,7 +687,7 @@ function wireBoardEmptyActions() {
         return;
       }
       if (action === "import-notes") {
-        toast("Import from notes is planned next; use Create ticket for now");
+        openImportNotesPanel();
         return;
       }
       if (action === "doctor") {
@@ -911,6 +969,55 @@ function ticketFormHtml(t, mode, errors = {}) {
     </form>`;
 }
 
+function importNotesPanelHtml(draft, errors = {}) {
+  const prompt = importPromptText();
+  return `
+    <span class="panel-id">Import</span>
+    <h2>Import from notes</h2>
+    ${fieldErrorHtml(errors, "form")}
+    <div class="panel-section import-intro">
+      <p class="panel-desc">
+        Paste rough notes and copy a handoff prompt for your coding agent. The agent uses helm-create-ticket and writes triage tickets that you can review on the Board.
+      </p>
+    </div>
+    <form class="ticket-form" id="import-notes-form" novalidate>
+      <div class="panel-section">
+        <label class="panel-label" for="import-notes-text">Notes</label>
+        <textarea class="panel-textarea import-notes-textarea" id="import-notes-text" name="notes" rows="10" placeholder="Paste roadmap notes, TODOs, bug reports, or open loops">${escapeHtml(draft.notes)}</textarea>
+        ${fieldErrorHtml(errors, "notes")}
+      </div>
+
+      <div class="panel-section">
+        <label class="panel-label" for="import-context-refs">Optional files or refs</label>
+        <textarea class="panel-textarea" id="import-context-refs" name="context_refs" rows="4" placeholder="One Markdown, TODO, roadmap file, branch, URL, or doc ref per line">${escapeHtml(draft.contextRefs)}</textarea>
+      </div>
+
+      <label class="check-row import-check">
+        <input id="import-create-immediately" type="checkbox"${draft.createImmediately ? " checked" : ""} />
+        <span>Create triage tickets after the agent previews the proposed batch</span>
+      </label>
+
+      <div class="panel-form-actions">
+        <button class="primary-btn" id="import-generate" type="submit">Generate prompt</button>
+        <button class="ghost-btn" id="import-copy" type="button"${prompt ? "" : " disabled"}>Copy prompt</button>
+        <button class="ghost-btn" id="import-cancel" type="button">Cancel</button>
+      </div>
+    </form>
+
+    ${
+      prompt
+        ? `<div class="panel-section import-prompt-section">
+             <div class="panel-section-head">
+               <h3>Agent prompt</h3>
+               <button class="ghost-btn launch-preview-btn" id="import-copy-inline" type="button">Copy</button>
+             </div>
+             <textarea class="panel-textarea import-prompt-output" readonly rows="14">${escapeHtml(prompt)}</textarea>
+             <p class="panel-hint">After the agent validates and writes tickets, refresh the Board and review the new triage cards before moving anything forward.</p>
+           </div>`
+        : ""
+    }`;
+}
+
 function showPanelHtml(html) {
   $("#panel-body").innerHTML = html;
   $("#panel").hidden = false;
@@ -928,6 +1035,20 @@ function openCreateTicketPanel(ticket = defaultTicketDraft(), errors = {}) {
   if (title) title.focus();
 }
 
+function openImportNotesPanel(draft = null, errors = {}) {
+  if (!draft) {
+    state.importPrompt = "";
+    draft = defaultImportDraft();
+  }
+  state.openTicketId = null;
+  state.panelMode = "import-notes";
+  stopLogPolling();
+  showPanelHtml(importNotesPanelHtml(draft, errors));
+  wireImportNotesPanel();
+  const notes = $("#import-notes-text");
+  if (notes) notes.focus();
+}
+
 function openEditTicketPanel(id, errors = {}, draft = null) {
   const ticket = draft || state.byId.get(id);
   if (!ticket) return;
@@ -938,6 +1059,21 @@ function openEditTicketPanel(id, errors = {}, draft = null) {
   wireTicketForm("edit", ticket);
   const title = $("#ticket-title");
   if (title) title.focus();
+}
+
+function wireImportNotesPanel() {
+  const form = $("#import-notes-form");
+  const cancel = $("#import-cancel");
+  const copy = $("#import-copy");
+  const copyInline = $("#import-copy-inline");
+  if (cancel) cancel.addEventListener("click", closePanel);
+  if (copy) copy.addEventListener("click", () => copyImportNotesPrompt(copy));
+  if (copyInline) copyInline.addEventListener("click", () => copyImportNotesPrompt(copyInline));
+  if (!form) return;
+  form.addEventListener("submit", (e) => {
+    e.preventDefault();
+    generateImportNotesPrompt($("#import-generate"));
+  });
 }
 
 function readTicketForm(ticket) {
@@ -1306,6 +1442,7 @@ function closePanel() {
   $("#panel-overlay").hidden = true;
   state.openTicketId = null;
   state.panelMode = "view";
+  state.importPrompt = "";
   stopLogPolling();
 }
 
@@ -1344,6 +1481,8 @@ function wireChrome() {
   $("#arm-toggle").addEventListener("click", () => setArmed(!state.board.armed));
   const createBtn = $("#create-ticket");
   if (createBtn) createBtn.addEventListener("click", () => openCreateTicketPanel());
+  const importBtn = $("#import-notes");
+  if (importBtn) importBtn.addEventListener("click", () => openImportNotesPanel());
   const engineBtn = $("#engine-toggle");
   if (engineBtn) {
     engineBtn.addEventListener("click", () => {

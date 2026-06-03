@@ -1,6 +1,7 @@
 // HelmMate Home view — vanilla JS. Tab shell + live ops dashboard.
 // Owns: tab switching (Home | Board), localStorage tab memory, and the
-// Home dashboard which polls /api/usage, /api/scheduler, /api/runs.
+// Home dashboard which polls /api/setup/status, /api/config, /api/state,
+// /api/usage, /api/scheduler, /api/runs, and /api/tickets.
 // Does NOT touch board.js state — only reads its own endpoints.
 
 (function () {
@@ -13,9 +14,13 @@
     visible: false,
     timer: null,
     countdownTimer: null,
+    setup: null,
+    config: null,
+    state: null,
     usage: null,
     scheduler: null,
     runs: null,
+    tickets: null,
     // Captured at last /api/usage poll so the countdown can tick locally.
     resetAt: null, // ms epoch
   };
@@ -136,14 +141,24 @@
   }
 
   async function poll() {
-    const [usage, scheduler, runs] = await Promise.all([
-      getJSON("/api/usage"),
+    const [setup, config, state, scheduler, runs, tickets] = await Promise.all([
+      getJSON("/api/setup/status"),
+      getJSON("/api/config"),
+      getJSON("/api/state"),
       getJSON("/api/scheduler"),
       getJSON("/api/runs"),
+      getJSON("/api/tickets"),
     ]);
-    home.usage = usage;
+    home.setup = setup;
+    home.config = config;
+    home.state = state;
     home.scheduler = scheduler;
     home.runs = Array.isArray(runs) ? runs : runs == null ? null : [];
+    home.tickets = Array.isArray(tickets) ? tickets : tickets == null ? null : [];
+    render();
+
+    const usage = await getJSON("/api/usage");
+    home.usage = usage;
 
     // Anchor the live countdown to a real timestamp if we have one.
     const block = usage && usage.block ? usage.block : null;
@@ -190,6 +205,59 @@
       /* leave as-is */
     }
     render();
+  }
+
+  async function initializeFolders(btn) {
+    if (btn) btn.disabled = true;
+    try {
+      await fetch("/api/setup/init", { method: "POST" });
+    } catch {
+      /* refresh will show the effective state */
+    }
+    await poll();
+    if (btn) btn.disabled = false;
+  }
+
+  async function createStarterTicket(btn) {
+    if (btn) btn.disabled = true;
+    const repo = (home.setup && Array.isArray(home.setup.repos) && home.setup.repos[0])
+      || (home.config && Array.isArray(home.config.repos) && home.config.repos[0])
+      || "workspace";
+    try {
+      const res = await fetch("/api/tickets", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: "First HelmMate ticket",
+          repo,
+          priority: "P2",
+          status: "triage",
+          description: "Created from the Home readiness checklist.",
+          acceptance_criteria: ["Ticket appears on the board"],
+        }),
+      });
+      if (res.ok && window.devboardSetView) window.devboardSetView("board");
+    } catch {
+      /* keep Home calm; the checklist will stay on the current step */
+    }
+    await poll();
+    if (btn) btn.disabled = false;
+  }
+
+  async function setArmed(armed, btn) {
+    if (btn) btn.disabled = true;
+    try {
+      const res = await fetch("/api/arm", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ armed: !!armed }),
+      });
+      if (res.ok) home.state = await res.json();
+    } catch {
+      /* leave as-is */
+    }
+    await poll();
+    if (btn) btn.disabled = false;
   }
 
   // Manually dispatch a CI-fix / conflict-fix for a PR (button in CI Watch).
@@ -271,11 +339,97 @@
     return raw ? shortReason(raw).toLowerCase() : "endpoint unavailable";
   }
 
-  function renderBlockCard() {
+  function selectedEngine() {
+    const allowed = home.config && Array.isArray(home.config.engines) ? home.config.engines : ["claude", "codex"];
+    const stateEngine = home.state && home.state.defaultEngine;
+    const configEngine = home.config && home.config.defaultEngine;
+    if (allowed.includes(stateEngine)) return stateEngine;
+    if (allowed.includes(configEngine)) return configEngine;
+    return "claude";
+  }
+
+  function hasRunHistory() {
+    const runs = Array.isArray(home.runs) ? home.runs : [];
+    const schedulerRunning = home.scheduler && Array.isArray(home.scheduler.running) ? home.scheduler.running : [];
+    return runs.length > 0 || schedulerRunning.length > 0;
+  }
+
+  function ticketMap() {
+    return new Map((Array.isArray(home.tickets) ? home.tickets : []).map((t) => [t.id, t]));
+  }
+
+  function depsUnmet(ticket, byId) {
+    const deps = Array.isArray(ticket && ticket.depends_on) ? ticket.depends_on : [];
+    return deps.filter((id) => {
+      const dep = byId.get(id);
+      return !dep || dep.status !== "done";
+    });
+  }
+
+  function isLaunchReady(ticket, byId, repos, running) {
+    if (!ticket || !["triage", "backlog"].includes(ticket.status)) return false;
+    if (running.has(ticket.id)) return false;
+    if (depsUnmet(ticket, byId).length > 0) return false;
+    if (!repos.has(ticket.repo)) return false;
+    if (ticket.status !== "triage" && (!Array.isArray(ticket.acceptance_criteria) || !ticket.acceptance_criteria.length)) {
+      return false;
+    }
+    return true;
+  }
+
+  function readiness() {
+    const setup = home.setup || {};
+    const config = home.config || {};
+    const state = home.state || {};
+    const tickets = Array.isArray(home.tickets) ? home.tickets : [];
+    const byId = ticketMap();
+    const repos = new Set(Array.isArray(config.repos) && config.repos.length ? config.repos : setup.repos || []);
+    const runningIds = new Set([
+      ...(Array.isArray(state.running) ? state.running : []),
+      ...(home.scheduler && Array.isArray(home.scheduler.running) ? home.scheduler.running : []),
+    ]);
+    const repoRows = Array.isArray(setup.repoStatus) && setup.repoStatus.length
+      ? setup.repoStatus
+      : Array.from(repos).map((key) => ({ key, exists: null, path: "" }));
+    const projectConfigured = !!setup.configPath && (repos.size > 0 || !!config.activeProject || !!setup.activeProject);
+    const foldersReady = !!setup.ticketsDirExists && !!setup.indexExists;
+    const supportFoldersReady = setup.agentDirExists !== false && setup.memoryQueueDirExists !== false;
+    const reposReady = repos.size > 0 && repoRows.every((repo) => repo.exists !== false);
+    const launchReady = tickets.filter((ticket) => isLaunchReady(ticket, byId, repos, runningIds));
+    const restart = !!setup.requiresRestart
+      || !!(setup.configuredActiveProject && setup.runtimeActiveProject && setup.configuredActiveProject !== setup.runtimeActiveProject);
+
+    let stage = "no-project";
+    if (hasRunHistory()) stage = "runs";
+    else if (!projectConfigured) stage = "no-project";
+    else if (!foldersReady || !supportFoldersReady || !reposReady || restart) stage = "folders-missing";
+    else if (!tickets.length) stage = "no-tickets";
+    else if (!launchReady.length) stage = "none-launch-ready";
+    else stage = "launch-ready";
+
+    return {
+      stage,
+      setup,
+      config,
+      state,
+      tickets,
+      launchReady,
+      repoRows,
+      projectConfigured,
+      foldersReady,
+      supportFoldersReady,
+      reposReady,
+      restart,
+      engine: selectedEngine(),
+    };
+  }
+
+  function renderBlockCard(opts = {}) {
     const u = home.usage;
     const b = u && u.block ? u.block : null;
     if (!u && !b) {
-      return card("5h Block Usage", `<p class="home-empty">No usage data. <span class="home-na">/api/usage</span> not available.</p>`);
+      const quiet = opts.quietUnavailable || selectedEngine() !== "claude";
+      return card("5h Block Usage", `<p class="home-empty">${quiet ? "Claude usage is secondary for the current engine." : 'No usage data. <span class="home-na">/api/usage</span> not available.'}</p>`, { sub: quiet ? "secondary" : "" });
     }
     const pct = b ? b.pct : null;
     const official = (u && u.source === "official") || (b && b.source === "official");
@@ -285,6 +439,12 @@
     // "unavailable" state instead of a misleading gauge.
     if (!official) {
       const reason = (b && b.officialError) || (u && u.officialError) || "endpoint unavailable";
+      if (opts.quietUnavailable || selectedEngine() !== "claude") {
+        return card("5h Block Usage", `
+          <p class="home-empty home-empty--inline">Claude usage is secondary for the current engine.</p>
+          <div class="home-note home-dim">Live Claude usage is retrying quietly.</div>
+        `, { sub: "secondary" });
+      }
       return card("5h Block Usage", `
         <div class="home-big">
           <span class="home-big-num home-big--muted">—</span>
@@ -310,7 +470,7 @@
     `, { sub: u && u.asOf ? relTime(u.asOf) : "" });
   }
 
-  function renderBurnCard() {
+  function renderBurnCard(opts = {}) {
     const u = home.usage;
     const codex = u && u.codex ? u.codex : null;
     if (codex) {
@@ -336,7 +496,14 @@
 
     const b = u && u.block ? u.block : null;
     if (!b) {
-      return card("Burn Rate", `<p class="home-empty">No burn data. <span class="home-na">/api/usage</span> not available.</p>`);
+      const quiet = opts.quietUnavailable || selectedEngine() === "codex";
+      return card(selectedEngine() === "codex" ? "Codex Usage" : "Burn Rate", `<p class="home-empty">${quiet ? "Usage appears after local session data is available." : 'No burn data. <span class="home-na">/api/usage</span> not available.'}</p>`, { sub: quiet ? "quiet" : "" });
+    }
+    if (opts.quietUnavailable && selectedEngine() === "codex") {
+      return card("Codex Usage", `
+        <p class="home-empty home-empty--inline">Codex usage appears after local session data is available.</p>
+        <div class="home-note home-dim">Claude burn data is secondary for the current engine.</div>
+      `, { sub: "quiet" });
     }
     const burn = num(b.burnTokensPerMin);
     const official = (u && u.source === "official") || b.source === "official";
@@ -374,11 +541,12 @@
     `);
   }
 
-  function renderWeeklyCard() {
+  function renderWeeklyCard(opts = {}) {
     const u = home.usage;
     const w = u && u.weekly ? u.weekly : null;
     if (!w) {
-      return card("Weekly Usage", `<p class="home-empty">No weekly data.</p>`);
+      const quiet = opts.quietUnavailable || selectedEngine() !== "claude";
+      return card("Weekly Usage", `<p class="home-empty">${quiet ? "Claude weekly usage is secondary for the current engine." : "No weekly data."}</p>`, { sub: quiet ? "secondary" : "" });
     }
     const official = w.source === "official";
 
@@ -397,6 +565,13 @@
     // an honest unavailable state rather than that number.
     if (!official) {
       const reason = w.officialError || (u && u.officialError) || "endpoint unavailable";
+      if (opts.quietUnavailable || selectedEngine() !== "claude") {
+        return card("Weekly Usage", `
+          <p class="home-empty home-empty--inline">Claude weekly usage is secondary for the current engine.</p>
+          <div class="home-note home-dim">Live Claude usage is retrying quietly.</div>
+          ${extraLine}
+        `, { sub: "secondary" });
+      }
       return card("Weekly Usage", `
         <div class="home-big home-big--sm">
           <span class="home-big-num home-big--muted">—</span>
@@ -616,6 +791,185 @@
     return card("CI Watch", body, { sub: String(ci.length) });
   }
 
+  function stepRow(ok, label, detail, tone = "") {
+    return `
+      <li class="${ok ? "projects-step projects-step--done" : "projects-step"}${tone ? ` projects-step--${tone}` : ""}">
+        <span class="projects-step-dot"></span>
+        <span class="projects-step-main">${esc(label)}</span>
+        <span class="projects-step-detail">${esc(detail || "not configured")}</span>
+      </li>`;
+  }
+
+  function stageCopy(stage) {
+    const map = {
+      "no-project": {
+        title: "Connect a project",
+        detail: "Choose or create a project configuration before HelmMate can prepare tickets.",
+        sub: "first run",
+      },
+      "folders-missing": {
+        title: "Prepare local folders",
+        detail: "Create the ticket index and support folders, then confirm repos are reachable.",
+        sub: "setup",
+      },
+      "no-tickets": {
+        title: "Create a first ticket",
+        detail: "The project is ready for tickets. Start with one reviewed, small task.",
+        sub: "ready",
+      },
+      "none-launch-ready": {
+        title: "Review tickets",
+        detail: "Tickets exist, but none currently satisfy the launch checks.",
+        sub: "needs review",
+      },
+      "launch-ready": {
+        title: "Ready to launch",
+        detail: "At least one ticket can launch once the board is armed and dispatch is enabled.",
+        sub: "launch-ready",
+      },
+    };
+    return map[stage] || map["no-project"];
+  }
+
+  function renderReadinessSummary(r) {
+    const copy = stageCopy(r.stage);
+    const readyCount = r.launchReady.length;
+    const ticketCount = r.tickets.length;
+    const board = r.state || {};
+    const dispatchState = !readyCount
+      ? "waiting"
+      : board.armed && home.scheduler && home.scheduler.autopilot
+      ? "enabled"
+      : board.armed
+      ? "arm on"
+      : "disarmed";
+    return card("Home Readiness", `
+      <div class="home-ready-hero">
+        <span class="home-ready-kicker">${esc(copy.sub)}</span>
+        <h2>${esc(copy.title)}</h2>
+        <p>${esc(copy.detail)}</p>
+      </div>
+      <div class="home-ready-stats">
+        ${metricRow("project", esc(r.setup.activeProject || r.config.activeProject || "none"))}
+        ${metricRow("tickets", fmtInt(ticketCount))}
+        ${metricRow("launch-ready", fmtInt(readyCount))}
+        ${metricRow("dispatch", esc(dispatchState))}
+      </div>
+    `);
+  }
+
+  function renderReadinessChecklist(r) {
+    const repoDetail = r.repoRows.length
+      ? r.repoRows
+          .map((repo) => {
+            const state = repo.exists === true ? "ok" : repo.exists === false ? "missing" : "configured";
+            return `${repo.key}: ${state}${repo.path ? ` (${repo.path})` : ""}`;
+          })
+          .join("; ")
+      : "none";
+    const setup = r.setup || {};
+    const board = r.state || {};
+    const readyTicketDetail = r.launchReady.length
+      ? r.launchReady.slice(0, 3).map((t) => t.id).join(", ")
+      : r.tickets.length
+      ? "move a reviewed ticket to triage/backlog with deps done"
+      : "create a starter ticket";
+    return card("Readiness Checklist", `
+      <ul class="projects-steps">
+        ${stepRow(r.projectConfigured, "Project config", setup.configPath || "open Projects to configure")}
+        ${stepRow(!r.restart, "Active project", r.restart ? setup.restartReason || "restart needed to load selected project" : setup.runtimeActiveProject || setup.activeProject || "loaded", r.restart ? "warn" : "")}
+        ${stepRow(!!setup.ticketsDirExists, "Tickets directory", setup.ticketsDir || "not configured")}
+        ${stepRow(!!setup.indexExists, "Ticket index", setup.indexExists ? "_index.json exists" : "missing or will be created")}
+        ${stepRow(setup.agentDirExists !== false, "Agent folder", setup.agentDir || "not configured")}
+        ${stepRow(setup.memoryQueueDirExists !== false, "Memory queue", setup.memoryQueueDir || "not configured")}
+        ${stepRow(r.reposReady, "Configured repos", repoDetail)}
+        ${stepRow(r.tickets.length > 0, "Tickets", r.tickets.length ? `${r.tickets.length} found` : "none yet")}
+        ${stepRow(r.launchReady.length > 0, "Launch-ready tickets", readyTicketDetail)}
+        ${stepRow(board.armed === false, "Board starts safe", board.armed === true ? "armed" : board.armed === false ? "disarmed" : "unknown", board.armed === true ? "warn" : "")}
+      </ul>
+    `, { sub: r.stage === "launch-ready" ? `${r.launchReady.length} ready` : "next check" });
+  }
+
+  function actionButton(id, label, primary = false) {
+    return `<button class="projects-btn${primary ? " projects-btn--primary" : ""}" id="${esc(id)}" type="button">${esc(label)}</button>`;
+  }
+
+  function renderNextActions(r) {
+    let lead = "Open Projects to connect a workspace.";
+    let buttons = [actionButton("home-open-projects", "Open Projects", true)];
+
+    if (r.stage === "folders-missing") {
+      lead = r.restart ? "Restart the server after the selected project change, then refresh Home." : "Initialize the local ticket and agent folders.";
+      buttons = [
+        actionButton("home-init-folders", "Initialize folders", true),
+        actionButton("home-open-projects", "Open Projects"),
+        actionButton("home-refresh", "Refresh"),
+      ];
+    } else if (r.stage === "no-tickets") {
+      lead = "Create a small starter ticket, then review it on the Board.";
+      buttons = [
+        actionButton("home-create-ticket", "Create starter ticket", true),
+        actionButton("home-open-board", "Open Board"),
+        actionButton("home-open-projects", "Open Projects"),
+      ];
+    } else if (r.stage === "none-launch-ready") {
+      lead = "Review ticket status, dependencies, repo, and acceptance criteria.";
+      buttons = [
+        actionButton("home-open-board", "Review Board", true),
+        actionButton("home-create-ticket", "Create starter ticket"),
+        actionButton("home-open-projects", "Run Doctor"),
+      ];
+    } else if (r.stage === "launch-ready") {
+      const armed = !!(r.state && r.state.armed);
+      const autopilot = !!(home.scheduler && home.scheduler.autopilot);
+      lead = !armed
+        ? "Arm the board when you want launch-ready tickets to run."
+        : !autopilot
+        ? "Enable autopilot to let the scheduler dispatch ready work."
+        : "The scheduler can dispatch on its next poll.";
+      buttons = [
+        !armed ? actionButton("home-arm-board", "Arm board", true) : !autopilot ? actionButton("home-autopilot-ready", "Enable autopilot", true) : actionButton("home-open-board", "Open Board", true),
+        actionButton("home-open-board", "Review Board"),
+        actionButton("home-refresh", "Refresh"),
+      ];
+    }
+
+    return card("Next Actions", `
+      <p class="home-ready-lead">${esc(lead)}</p>
+      <div class="projects-actions">${buttons.join("")}</div>
+      <div class="home-note home-dim">Home stays in readiness mode until a run is active or recorded.</div>
+    `);
+  }
+
+  function renderReadinessUsage(r) {
+    const engineLabel = r.engine === "codex" ? "Codex" : "Claude";
+    const usageCard = r.engine === "codex"
+      ? renderBurnCard({ quietUnavailable: true })
+      : renderBlockCard();
+    return `
+      ${card("Default Engine", `
+        <div class="home-big home-big--sm">
+          <span class="home-big-num">${esc(engineLabel)}</span>
+          <span class="home-big-label">selected for launches</span>
+        </div>
+        <div class="home-note">${r.engine === "codex" ? "Claude usage is secondary while Codex is the default engine." : "Claude usage matters for Claude launches and scheduler caps."}</div>
+      `, { sub: "routing" })}
+      ${usageCard}`;
+  }
+
+  function renderReadinessHome() {
+    const r = readiness();
+    return `
+      ${renderBreakerBanner()}
+      <div class="home-ready-grid">
+        ${renderReadinessSummary(r)}
+        ${renderNextActions(r)}
+        ${renderReadinessChecklist(r)}
+        ${renderDispatchCard()}
+        ${renderReadinessUsage(r)}
+      </div>`;
+  }
+
   function renderBreakerBanner() {
     const s = home.scheduler;
     const b = s && s.breaker ? s.breaker : null;
@@ -635,23 +989,37 @@
   function render() {
     const root = $("#home");
     if (!root) return;
-    root.innerHTML = `
-      ${renderBreakerBanner()}
-      <div class="home-grid">
-        ${renderBlockCard()}
-        ${renderBurnCard()}
-        ${renderWeeklyCard()}
-        ${renderDispatchCard()}
-        ${renderRunningCard()}
-        ${renderRecentRunsCard()}
-        ${renderCiCard()}
-      </div>`;
+    const engine = selectedEngine();
+    if (!hasRunHistory()) {
+      root.innerHTML = renderReadinessHome();
+    } else {
+      const quietClaude = engine !== "claude";
+      root.innerHTML = `
+        ${renderBreakerBanner()}
+        <div class="home-grid${quietClaude ? " home-grid--codex" : ""}">
+          ${quietClaude ? renderBurnCard({ quietUnavailable: true }) : renderBlockCard()}
+          ${quietClaude ? renderBlockCard({ quietUnavailable: true }) : renderBurnCard()}
+          ${renderWeeklyCard({ quietUnavailable: quietClaude })}
+          ${renderDispatchCard()}
+          ${renderRunningCard()}
+          ${renderRecentRunsCard()}
+          ${renderCiCard()}
+        </div>`;
+    }
 
     const ap = $("#home-autopilot");
     if (ap) ap.addEventListener("click", toggleAutopilot);
+    const readyAp = $("#home-autopilot-ready");
+    if (readyAp) readyAp.addEventListener("click", toggleAutopilot);
 
     const rb = $("#home-breaker-reset");
     if (rb) rb.addEventListener("click", resetBreaker);
+    $("#home-init-folders")?.addEventListener("click", (e) => initializeFolders(e.currentTarget));
+    $("#home-create-ticket")?.addEventListener("click", (e) => createStarterTicket(e.currentTarget));
+    $("#home-arm-board")?.addEventListener("click", (e) => setArmed(true, e.currentTarget));
+    $("#home-refresh")?.addEventListener("click", poll);
+    $("#home-open-projects")?.addEventListener("click", () => window.devboardSetView && window.devboardSetView("projects"));
+    $("#home-open-board")?.addEventListener("click", () => window.devboardSetView && window.devboardSetView("board"));
 
     root.querySelectorAll(".home-ci-fix").forEach((b) => {
       b.addEventListener("click", () =>

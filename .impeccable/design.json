@@ -1,0 +1,191 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-06-03T21:50:52Z",
+  "title": "Design System: HelmMate",
+  "extensions": {
+    "colorMeta": {
+      "void-black": {
+        "role": "neutral",
+        "displayName": "Void Black",
+        "canonical": "#050914",
+        "tonalRamp": ["#030711", "#050914", "#081224"]
+      },
+      "console-navy": {
+        "role": "neutral",
+        "displayName": "Console Navy",
+        "canonical": "#081224",
+        "tonalRamp": ["#020711", "#081224", "#0c1c34", "#0f2b4e"]
+      },
+      "signal-cyan": {
+        "role": "primary",
+        "displayName": "Signal Cyan",
+        "canonical": "#4cc9ff",
+        "tonalRamp": ["rgba(76, 201, 255, 0.045)", "rgba(76, 201, 255, 0.13)", "#4cc9ff", "#17f1ff"]
+      },
+      "live-mint": {
+        "role": "secondary",
+        "displayName": "Live Mint",
+        "canonical": "#2fffd0",
+        "tonalRamp": ["rgba(47, 255, 208, 0.08)", "rgba(47, 255, 208, 0.12)", "#2fffd0"]
+      },
+      "tripwire-red": {
+        "role": "tertiary",
+        "displayName": "Tripwire Red",
+        "canonical": "#ff5f7a",
+        "tonalRamp": ["rgba(255, 95, 122, 0.07)", "rgba(255, 95, 122, 0.12)", "#ff5f7a", "#ff6b8a"]
+      },
+      "queue-amber": {
+        "role": "tertiary",
+        "displayName": "Queue Amber",
+        "canonical": "#ffd166",
+        "tonalRamp": ["rgba(255, 209, 102, 0.06)", "rgba(255, 209, 102, 0.1)", "#ffd166", "#ffb347"]
+      },
+      "muted-steel": {
+        "role": "neutral",
+        "displayName": "Muted Steel",
+        "canonical": "#55758b",
+        "tonalRamp": ["#55758b", "#8aa6ba", "#91b8ce", "#e7f7ff"]
+      },
+      "codex-violet": {
+        "role": "secondary",
+        "displayName": "Codex Violet",
+        "canonical": "#b48cff",
+        "tonalRamp": ["rgba(180, 140, 255, 0.12)", "#b48cff", "#c7d2fe"]
+      }
+    },
+    "typographyMeta": {
+      "display": {
+        "displayName": "Onboarding Display",
+        "purpose": "First-run onboarding hero only."
+      },
+      "headline": {
+        "displayName": "Cockpit Headline",
+        "purpose": "Empty states, readiness summaries, and major panels."
+      },
+      "title": {
+        "displayName": "Panel Title",
+        "purpose": "Ticket panel headings and compact detail titles."
+      },
+      "body": {
+        "displayName": "Control Copy",
+        "purpose": "Descriptions, helper copy, cards, lists, and side-panel prose."
+      },
+      "label": {
+        "displayName": "Operational Mono",
+        "purpose": "Labels, IDs, paths, commands, counters, status labels, and model names."
+      }
+    },
+    "shadows": [
+      {
+        "name": "panel-shadow",
+        "value": "0 0 0 1px rgba(76, 201, 255, 0.08), 0 16px 40px rgba(0, 0, 0, 0.38)",
+        "purpose": "Default card and column depth."
+      },
+      {
+        "name": "signal-glow",
+        "value": "0 0 22px rgba(23, 241, 255, 0.18)",
+        "purpose": "Hover and focus emphasis for interactive controls."
+      },
+      {
+        "name": "drawer-shadow",
+        "value": "-20px 0 60px rgba(0,0,0,0.48), -1px 0 24px rgba(23,241,255,0.14)",
+        "purpose": "Right-side ticket panel separation."
+      },
+      {
+        "name": "drag-shadow",
+        "value": "0 18px 44px rgba(0,0,0,0.6), 0 0 28px rgba(23,241,255,0.22)",
+        "purpose": "Sortable drag state only."
+      }
+    ],
+    "motion": [
+      {
+        "name": "state-fast",
+        "value": "120ms ease",
+        "purpose": "Ticket hover, in-card action, and quick state transitions."
+      },
+      {
+        "name": "control-standard",
+        "value": "150ms ease",
+        "purpose": "Buttons, tabs, hover, and focus transitions."
+      },
+      {
+        "name": "onboarding-rise",
+        "value": "700ms cubic-bezier(0.2, 0.8, 0.2, 1)",
+        "purpose": "First-run onboarding entrance only, disabled under prefers-reduced-motion."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "desktop-collapse",
+        "value": "1100px",
+        "purpose": "Board and dashboard grids reduce columns."
+      },
+      {
+        "name": "tablet",
+        "value": "720px",
+        "purpose": "Sidebar becomes top rail; board stacks to one column."
+      },
+      {
+        "name": "phone",
+        "value": "640px",
+        "purpose": "Ticket panel becomes full-screen; controls increase tap size."
+      }
+    ],
+    "rules": [
+      "The Signal Rarity Rule: cyan is for selection, focus, running state, and actionable affordances.",
+      "The State Truth Rule: mint, red, and amber must map to actual product state.",
+      "The Operational Mono Rule: monospace facts users compare or copy.",
+      "The Glow Means State Rule: glow is allowed for hover, focus, active, running, armed, and drag states."
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Compact cyan or mint action used for reviewed, meaningful operations.",
+      "html": "<button class=\"primary-btn\">Save ticket</button>",
+      "css": ".primary-btn { min-height: 38px; border: 1px solid rgba(23, 241, 255, 0.46); border-radius: 8px; background: rgba(76, 201, 255, 0.13); color: #17f1ff; font: inherit; font-size: 13px; font-weight: 700; padding: 8px 14px; transition: border-color 0.15s, color 0.15s, box-shadow 0.15s, background 0.15s; } .primary-btn:hover { background: rgba(23, 241, 255, 0.18); border-color: #17f1ff; color: #e7f7ff; box-shadow: 0 0 22px rgba(23, 241, 255, 0.18); }"
+    },
+    {
+      "name": "Ghost Button",
+      "kind": "button",
+      "refersTo": "button-ghost",
+      "description": "Default chrome action for refresh, import, copy, and non-destructive controls.",
+      "html": "<button class=\"ghost-btn\">Refresh</button>",
+      "css": ".ghost-btn { padding: 8px 14px; border-radius: 8px; border: 1px solid rgba(72, 184, 255, 0.18); background: rgba(9, 22, 40, 0.76); color: #91b8ce; font-size: 13px; text-transform: uppercase; transition: border-color 0.15s, color 0.15s, box-shadow 0.15s, background 0.15s; } .ghost-btn:hover { background: rgba(12, 28, 52, 0.72); border-color: rgba(91, 207, 255, 0.42); color: #e7f7ff; box-shadow: 0 0 22px rgba(23, 241, 255, 0.18); }"
+    },
+    {
+      "name": "Ticket Card",
+      "kind": "card",
+      "refersTo": "card",
+      "description": "The signature work unit for ticket status, metadata, and review entry.",
+      "html": "<div class=\"card\"><div class=\"card-top\"><span class=\"card-id\">HM-12</span><span class=\"pill pill-p1\">P1</span></div><p class=\"card-title\">Review launch preview copy</p><div class=\"card-meta\"><span class=\"tag tag-repo\">workspace</span></div></div>",
+      "css": ".card { background: linear-gradient(180deg, rgba(17, 39, 69, 0.92), rgba(7, 18, 34, 0.9)); border: 1px solid rgba(72, 184, 255, 0.18); border-radius: 8px; padding: 12px 13px; box-shadow: 0 0 0 1px rgba(76, 201, 255, 0.08), 0 16px 40px rgba(0,0,0,0.38); transition: border-color 0.12s, transform 0.05s, box-shadow 0.12s, background 0.12s; } .card:hover { border-color: rgba(91, 207, 255, 0.42); box-shadow: 0 0 0 1px rgba(23,241,255,0.2), 0 14px 38px rgba(0,0,0,0.45), 0 0 24px rgba(23,241,255,0.12); }"
+    },
+    {
+      "name": "Panel Input",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "Dark control field for tickets, project config, prompts, and command previews.",
+      "html": "<input class=\"panel-input\" value=\"workspace\" />",
+      "css": ".panel-input { width: 100%; border: 1px solid rgba(91, 207, 255, 0.42); background: rgba(7, 21, 39, 0.84); color: #e7f7ff; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 14px; line-height: 1.45; padding: 9px 12px; border-radius: 8px; box-shadow: inset 0 0 18px rgba(76, 201, 255, 0.06); } .panel-input:focus { outline: none; border-color: #17f1ff; box-shadow: 0 0 0 1px rgba(23, 241, 255, 0.3), 0 0 22px rgba(23, 241, 255, 0.18); }"
+    },
+    {
+      "name": "Status Chip",
+      "kind": "chip",
+      "refersTo": "chip",
+      "description": "Tiny state label for priority, readiness, engine, role, and execution state.",
+      "html": "<span class=\"badge-ready\">ready</span>",
+      "css": ".badge-ready { font-size: 10px; font-weight: 700; letter-spacing: 0.04em; color: #2fffd0; background: rgba(47, 255, 208, 0.12); border: 1px solid rgba(47, 255, 208, 0.22); padding: 2px 7px; border-radius: 6px; }"
+    },
+    {
+      "name": "Side Panel",
+      "kind": "custom",
+      "refersTo": "side-panel",
+      "description": "Desktop review drawer that becomes a full-screen phone panel.",
+      "html": "<aside class=\"panel\"><button class=\"panel-close\" aria-label=\"Close\">x</button><div class=\"panel-body\"><h2>Ticket review</h2></div></aside>",
+      "css": ".panel { position: fixed; top: 0; right: 0; bottom: 0; width: min(520px, 92vw); background: rgba(8, 19, 36, 0.82); border-left: 1px solid rgba(91, 207, 255, 0.42); box-shadow: -20px 0 60px rgba(0,0,0,0.48), -1px 0 24px rgba(23,241,255,0.14); overflow-y: auto; padding: 28px 28px 48px; } @media (max-width: 640px) { .panel { width: 100vw; border-left: none; padding: 24px 18px 40px; } }"
+    }
+  ]
+}

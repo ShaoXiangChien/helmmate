@@ -55,9 +55,9 @@ body::before {
   inset: 0;
   pointer-events: none;
   background:
-    linear-gradient(90deg, transparent 0%, rgba(23, 241, 255, 0.05) 50%, transparent 100%),
-    repeating-linear-gradient(180deg, rgba(255,255,255,0.018) 0 1px, transparent 1px 4px);
-  opacity: 0.68;
+    radial-gradient(circle at 18% 12%, rgba(23, 241, 255, 0.08), transparent 28%),
+    linear-gradient(90deg, transparent 0%, rgba(23, 241, 255, 0.04) 50%, transparent 100%);
+  opacity: 0.72;
 }
 
 /* ---------- Topbar ---------- */
@@ -103,6 +103,7 @@ body::before {
 
 .arm {
   display: inline-flex; align-items: center; gap: 8px;
+  min-height: 38px;
   padding: 8px 16px; border-radius: var(--radius-sm);
   border: 1px solid var(--line-strong);
   font-size: 13px; font-weight: 600; cursor: pointer;
@@ -121,6 +122,10 @@ body::before {
 .arm--on .arm-dot { background: var(--armed); box-shadow: 0 0 0 3px rgba(47,255,208,0.14), 0 0 14px rgba(47,255,208,0.7); }
 
 .ghost-btn {
+  min-height: 38px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   padding: 8px 14px; border-radius: var(--radius-sm);
   border: 1px solid var(--line); background: rgba(9, 22, 40, 0.76);
   color: var(--ink-soft); font-size: 13px; cursor: pointer;
@@ -128,6 +133,20 @@ body::before {
   transition: border-color 0.15s, color 0.15s, box-shadow 0.15s, background 0.15s;
 }
 .ghost-btn:hover { background: var(--surface-2); border-color: var(--line-strong); color: var(--ink); box-shadow: var(--glow); }
+.ghost-btn:focus-visible,
+.arm:focus-visible,
+.primary-btn:focus-visible,
+.stop-btn:focus-visible,
+.resume-btn:focus-visible,
+.panel-close:focus-visible,
+.panel-move:focus-visible,
+.panel-input:focus-visible,
+.panel-textarea:focus-visible,
+.card-resume:focus-visible,
+.card-stop:focus-visible {
+  outline: 2px solid rgba(23, 241, 255, 0.72);
+  outline-offset: 2px;
+}
 .ghost-btn--on {
   background: var(--accent-soft);
   color: var(--accent-2);
@@ -289,6 +308,11 @@ body::before {
 .card:hover {
   border-color: var(--line-strong);
   box-shadow: 0 0 0 1px rgba(23,241,255,0.2), 0 14px 38px rgba(0,0,0,0.45), 0 0 24px rgba(23,241,255,0.12);
+}
+.card:focus-visible {
+  outline: 2px solid rgba(23, 241, 255, 0.72);
+  outline-offset: 3px;
+  border-color: var(--accent-2);
 }
 .card:hover::before { opacity: 1; }
 .card:active { transform: scale(0.997); }
@@ -511,6 +535,12 @@ body::before {
   opacity: 0.5;
   cursor: not-allowed;
 }
+.ghost-btn:disabled,
+.primary-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  box-shadow: none;
+}
 .launch-preview-section {
   border: 1px solid rgba(76, 201, 255, 0.16);
   border-radius: var(--radius-sm);
@@ -585,6 +615,43 @@ body::before {
 .panel-desc { font-size: 13.5px; line-height: 1.6; color: var(--ink-soft); margin: 0; }
 
 .ticket-form { margin-top: 12px; }
+.import-intro {
+  padding: 12px 14px;
+  border: 1px solid rgba(76, 201, 255, 0.14);
+  border-radius: var(--radius-sm);
+  background: rgba(3, 10, 22, 0.18);
+}
+.import-notes-textarea {
+  min-height: 180px;
+}
+.check-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  color: var(--ink-soft);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+.check-row input {
+  flex: none;
+  margin-top: 2px;
+  accent-color: var(--accent);
+}
+.import-check {
+  margin-top: 18px;
+}
+.import-prompt-section {
+  border: 1px solid rgba(76, 201, 255, 0.16);
+  border-radius: var(--radius-sm);
+  background: rgba(3, 10, 22, 0.18);
+  padding: 14px 16px;
+}
+.import-prompt-output {
+  min-height: 280px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  line-height: 1.55;
+}
 .ticket-form-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -629,6 +696,9 @@ body::before {
 }
 .primary-btn {
   min-height: 38px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   border: 1px solid rgba(23, 241, 255, 0.46);
   border-radius: var(--radius-sm);
   background: var(--accent-soft);
@@ -798,13 +868,19 @@ body::before {
 @media (max-width: 640px) {
   body { font-size: 15px; }
 
-  /* 40px min tap targets across the header chrome. */
+  /* 44px min tap targets across touch chrome. */
   .arm,
   .ghost-btn,
+  .primary-btn,
+  .stop-btn,
+  .resume-btn,
+  .card-stop,
+  .card-resume,
   .tab {
-    min-height: 40px;
+    min-height: 44px;
     display: inline-flex;
     align-items: center;
+    justify-content: center;
   }
 
   /* Full-screen side panel — no cramped 92vw drawer on a phone. */

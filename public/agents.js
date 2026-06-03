@@ -13,7 +13,6 @@
     data: null, // last successful /api/agents response
     queue: null, // last successful /api/memory-queue response
     timer: null, // idle auto-refresh interval
-    dirty: false, // true when an editor field has unsaved edits
   };
 
   // -----------------------------------------------------------------------
@@ -83,15 +82,11 @@
     render();
   }
 
-  // Auto-refresh the spend/queue on a gentle cadence, but NEVER while the user
-  // is mid-interaction — skip if an editor field is focused, there are unsaved
-  // edits, or a proposal is expanded (so a refresh can't clobber or collapse it).
+  // Auto-refresh the spend/queue on a gentle cadence, but never while the user
+  // is reading an expanded proposal.
   function busy() {
     const root = $("#agents");
     if (!root) return true;
-    if (agents.dirty) return true;
-    const ae = document.activeElement;
-    if (ae && root.contains(ae) && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName)) return true;
     if (root.querySelector("details[open]")) return true;
     return false;
   }
@@ -101,106 +96,11 @@
     fetchAgents();
   }
 
-  // Resolve a pending memory proposal (archive = applied; dismiss = skipped).
-  async function resolveQueue(id, action, btn) {
-    const safe = String(id).replace(/[^a-zA-Z0-9_-]/g, "_");
-    const statusEl = $(`#agents-queue-status-${CSS.escape(safe)}`);
-    if (btn) btn.disabled = true;
-    try {
-      const res = await fetch(`/api/memory-queue/${encodeURIComponent(id)}/resolve`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action }),
-      });
-      if (res.ok) {
-        fetchAgents(); // re-fetch so the resolved item drops out of the list
-        return;
-      }
-      let msg = `HTTP ${res.status}`;
-      try {
-        const e = await res.json();
-        if (e && e.error) msg = e.error;
-      } catch {
-        // ignore
-      }
-      if (statusEl) {
-        statusEl.textContent = `error: ${msg}`;
-        statusEl.className = "agents-status agents-status--err";
-      }
-    } catch (err) {
-      if (statusEl) {
-        statusEl.textContent = `error: ${err && err.message ? err.message : "network"}`;
-        statusEl.className = "agents-status agents-status--err";
-      }
-    }
-    if (btn) btn.disabled = false;
-  }
-
   function setRefreshState(loading) {
     const btn = $("#agents-refresh");
     if (!btn) return;
     btn.disabled = loading;
     btn.textContent = loading ? "Loading…" : "Refresh";
-  }
-
-  // -----------------------------------------------------------------------
-  // Save a single agent (PUT /api/agents/:role)
-  // -----------------------------------------------------------------------
-  async function saveAgent(role, statusEl, saveBtn) {
-    const descInput = $(`#agents-desc-${CSS.escape(role)}`);
-    const modelSel = $(`#agents-model-${CSS.escape(role)}`);
-    const bodyTA = $(`#agents-body-${CSS.escape(role)}`);
-
-    if (!descInput || !modelSel || !bodyTA) return;
-
-    const payload = {
-      description: descInput.value,
-      model: modelSel.value,
-      body: bodyTA.value,
-    };
-
-    saveBtn.disabled = true;
-    saveBtn.textContent = "Saving…";
-    statusEl.textContent = "";
-    statusEl.className = "agents-status";
-
-    try {
-      const res = await fetch(`/api/agents/${encodeURIComponent(role)}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-
-      if (res.ok) {
-        const updated = await res.json();
-        // Patch the in-memory data so other cards are not blown away.
-        if (agents.data && Array.isArray(agents.data.agents)) {
-          const idx = agents.data.agents.findIndex((a) => a.role === role);
-          if (idx !== -1 && updated.agent) {
-            agents.data.agents[idx] = updated.agent;
-          }
-        }
-        statusEl.textContent = "saved ✓";
-        statusEl.className = "agents-status agents-status--ok";
-        agents.dirty = false; // edits persisted — idle auto-refresh may resume
-      } else {
-        let msg = `HTTP ${res.status}`;
-        try {
-          const e = await res.json();
-          if (e && e.error) msg = e.error;
-        } catch {
-          // ignore
-        }
-        statusEl.textContent = `error: ${msg}`;
-        statusEl.className = "agents-status agents-status--err";
-      }
-    } catch (err) {
-      statusEl.textContent = `error: ${err && err.message ? err.message : "network error"}`;
-      statusEl.className = "agents-status agents-status--err";
-    }
-
-    saveBtn.disabled = false;
-    saveBtn.textContent = "Save";
   }
 
   // -----------------------------------------------------------------------
@@ -215,6 +115,119 @@
     else if (m.includes("opus")) cls = "agents-badge agents-badge--opus";
     else if (m.includes("haiku")) cls = "agents-badge agents-badge--haiku";
     return `<span class="${cls}">${esc(model || "unknown")}</span>`;
+  }
+
+  function statusBadge(ok, label) {
+    return `<span class="agents-file-badge ${ok ? "agents-file-badge--ok" : "agents-file-badge--missing"}">${esc(label || (ok ? "exists" : "missing"))}</span>`;
+  }
+
+  function pathLine(label, value, ok) {
+    return `
+      <div class="agents-path-row">
+        <span>${esc(label)}</span>
+        <code>${esc(value || "not configured")}</code>
+        ${typeof ok === "boolean" ? statusBadge(ok) : ""}
+      </div>`;
+  }
+
+  function setupOverview(setup) {
+    if (!setup) return "";
+    const engine = setup.engine || {};
+    const permissions = setup.permissions || {};
+    const locations = setup.locations || {};
+    const prompts = Array.isArray(setup.prompts) ? setup.prompts : [];
+    const routing = setup.roleRouting || {};
+    const mappings = Array.isArray(routing.repoMappings) ? routing.repoMappings : [];
+
+    const engineCards = `
+      <section class="home-card agents-trust-card">
+        <div class="home-card-head">
+          <h3>Default engine</h3>
+          ${modelBadge(engine.default || "unknown")}
+        </div>
+        <div class="home-card-body">
+          <p class="agents-copy">${esc(engine.explanation || "")}</p>
+          <div class="agents-kv-grid">
+            <div><span>board default</span><strong>${esc(engine.default || "unknown")}</strong></div>
+            <div><span>config default</span><strong>${esc(engine.configuredDefault || "unknown")}</strong></div>
+            <div><span>allowed</span><strong>${esc((engine.allowed || []).join(", ") || "none")}</strong></div>
+          </div>
+          ${pathLine("Claude command", engine.commands && engine.commands.claude)}
+          ${pathLine("Codex command", engine.commands && engine.commands.codex)}
+        </div>
+      </section>`;
+
+    const promptRows = prompts.length
+      ? prompts.map((p) => pathLine(p.label || p.key, `${p.ref || ""}${p.path ? " -> " + p.path : ""}`, !!p.exists)).join("")
+      : `<p class="home-empty">No prompt files configured.</p>`;
+
+    const repoRows = mappings.length
+      ? mappings
+          .map(
+            (repo) => `
+              <tr>
+                <td>${esc(repo.key)}</td>
+                <td>${esc(repo.role || "cross-repo")}</td>
+                <td>${esc(repo.worktree ? "worktree" : "in-place")}</td>
+                <td>${statusBadge(!!repo.exists, repo.exists ? "repo found" : "missing")}</td>
+              </tr>`
+          )
+          .join("")
+      : `<tr><td colspan="4">No repos configured.</td></tr>`;
+
+    const routingCard = `
+      <section class="home-card agents-trust-card agents-trust-card--wide">
+        <div class="home-card-head">
+          <h3>Role routing</h3>
+        </div>
+        <div class="home-card-body">
+          <p class="agents-copy">${esc(routing.explanation || "")}</p>
+          <table class="agents-routing-table">
+            <thead><tr><th>repo</th><th>role</th><th>mode</th><th>status</th></tr></thead>
+            <tbody>${repoRows}</tbody>
+          </table>
+        </div>
+      </section>`;
+
+    const promptCard = `
+      <section class="home-card agents-trust-card">
+        <div class="home-card-head">
+          <h3>Prompt files</h3>
+        </div>
+        <div class="home-card-body agents-path-stack">${promptRows}</div>
+      </section>`;
+
+    const warningCard = `
+      <section class="home-card agents-trust-card agents-warning-card">
+        <div class="home-card-head">
+          <h3>Permission warning</h3>
+          ${statusBadge(false, "review")}
+        </div>
+        <div class="home-card-body">
+          <p class="agents-copy">${esc(permissions.text || "")}</p>
+          <div class="agents-path-stack">
+            ${pathLine("Claude flag", permissions.claude)}
+            ${pathLine("Codex flag", permissions.codex)}
+            ${pathLine("Run logs", locations.ticketLogPattern || locations.logsDir)}
+            ${pathLine("Runs ledger", locations.runsLedger)}
+            ${pathLine("Memory proposals", locations.memoryProposalPattern || locations.memoryQueueDir)}
+          </div>
+        </div>
+      </section>`;
+
+    return `
+      <section class="agents-setup-section">
+        <div class="agents-section-head">
+          <h3>Before launch</h3>
+          <span>read-only setup review</span>
+        </div>
+        <div class="agents-trust-grid">
+          ${engineCards}
+          ${routingCard}
+          ${promptCard}
+          ${warningCard}
+        </div>
+      </section>`;
   }
 
   // Spend summary table for byRole or byModel
@@ -252,80 +265,54 @@
       </table>`;
   }
 
-  // One editable agent card
+  // One read-only agent card
   function agentCard(agent, usageByRole, codexConfig) {
     const role = agent.role || "unknown";
-    const safeId = role.replace(/[^a-zA-Z0-9_-]/g, "_");
     const roleUsage = usageByRole && usageByRole[role] ? usageByRole[role] : null;
     const codexModel = codexConfig && codexConfig.modelByRole ? codexConfig.modelByRole[role] : null;
     const codexEffort = codexConfig && codexConfig.effortByRole ? codexConfig.effortByRole[role] : null;
+    const setupRole = agent.persona ? agent : null;
+    const persona = setupRole ? setupRole.persona : agent;
+    const exists = agent.exists !== false && (!persona || persona.exists !== false);
+    const claude = agent.claude || {};
+    const preview = persona && persona.preview != null ? persona.preview : agent.body || "";
 
     const runsLine = roleUsage
       ? `${fmtInt(roleUsage.runs)} run${num(roleUsage.runs) !== 1 ? "s" : ""} · ${fmtUSD(roleUsage.cost_usd, roleUsage.has_cost)}`
       : "no runs yet";
 
-    const modelOptions = ["sonnet", "opus", "haiku"]
-      .map((m) => {
-        const sel = (agent.model || "").toLowerCase().includes(m) ? " selected" : "";
-        return `<option value="${esc(m)}"${sel}>${esc(m)}</option>`;
-      })
-      .join("");
-
     return `
       <section class="home-card agents-editor-card">
         <div class="home-card-head">
           <h3>${esc(role)}</h3>
-          ${modelBadge(agent.model)}
+          ${statusBadge(exists, exists ? "persona found" : "persona missing")}
         </div>
         <div class="home-card-body">
+          <p class="agents-copy">${esc(agent.meaning || "Repo-specific implementation role.")}</p>
           <div class="agents-runs-line">${esc(runsLine)}</div>
-          ${
-            codexModel
-              ? `<div class="agents-codex-line">Codex default: <span>${esc(codexModel)}</span> · <span>${esc(codexEffort || "medium")}</span></div>`
-              : ""
-          }
-
-          <div class="agents-field-row">
-            <label class="agents-label" for="agents-model-${esc(safeId)}">model</label>
-            <select class="agents-select" id="agents-model-${esc(safeId)}" name="model">
-              ${modelOptions}
-            </select>
+          <div class="agents-model-grid">
+            <div>
+              <span>Claude model</span>
+              <strong>${esc(claude.model || agent.model || agent.configuredModel || "sonnet")}</strong>
+              <small>${esc(claude.source || (agent.model ? "persona frontmatter" : "role config"))}</small>
+            </div>
+            <div>
+              <span>Codex model</span>
+              <strong>${esc(codexModel || (agent.codex && agent.codex.model) || "gpt-5.4-mini")}</strong>
+              <small>effort ${esc(codexEffort || (agent.codex && agent.codex.effort) || "medium")}</small>
+            </div>
           </div>
 
-          <div class="agents-field-col">
-            <label class="agents-label" for="agents-desc-${esc(safeId)}">description</label>
-            <input
-              class="agents-input"
-              id="agents-desc-${esc(safeId)}"
-              type="text"
-              value="${esc(agent.description || "")}"
-              placeholder="One-line persona description…"
-            />
-          </div>
+          ${pathLine("persona", (persona && persona.path) || agent.path, exists)}
 
-          <div class="agents-field-col">
-            <label class="agents-label" for="agents-body-${esc(safeId)}">body</label>
-            <textarea
-              class="agents-textarea"
-              id="agents-body-${esc(safeId)}"
-              rows="14"
-              placeholder="Markdown body (everything after frontmatter)…"
-            >${esc(agent.body || "")}</textarea>
-          </div>
-
-          <div class="agents-save-row">
-            <button
-              class="agents-save-btn"
-              type="button"
-              data-role="${esc(role)}"
-            >Save</button>
-            <span
-              class="agents-status"
-              id="agents-status-${esc(safeId)}"
-            ></span>
-          </div>
-
-          <div class="agents-path home-note">${esc(agent.path || "")}</div>
+          <details class="agents-persona-details"${exists && preview ? " open" : ""}>
+            <summary>persona preview</summary>
+            ${
+              exists && preview
+                ? `<pre class="agents-persona-pre">${esc(preview)}${persona && persona.previewTruncated ? "\n..." : ""}</pre>`
+                : `<p class="home-empty">Missing or empty persona file.</p>`
+            }
+          </details>
         </div>
       </section>`;
   }
@@ -333,9 +320,11 @@
   // Memory sync-queue: proposals dropped by autonomous sessions, awaiting review.
   function queueSection() {
     const q = agents.queue && Array.isArray(agents.queue.pending) ? agents.queue.pending : [];
+    const setup = agents.data && agents.data.setup ? agents.data.setup : {};
+    const locations = setup.locations || {};
     const head = `
       <div class="home-card-head">
-        <h3>Memory proposals</h3>
+        <h3>Memory proposal location</h3>
         <span class="agents-queue-count${q.length ? " agents-queue-count--has" : ""}">${
           q.length ? q.length + " pending" : "none pending"
         }</span>
@@ -346,28 +335,21 @@
         <section class="home-card agents-queue-card">
           ${head}
           <div class="home-card-body">
-            <p class="home-empty">No pending proposals. Autonomous sessions drop durable learnings in
-            <span class="home-na">memory/sync-queue/</span> for review; they appear here.</p>
+            <p class="home-empty">No pending proposals. Autonomous sessions drop durable learnings here for human review.</p>
+            ${pathLine("queue", locations.memoryQueueDir || "memory/sync-queue")}
           </div>
         </section>`;
     }
 
     const items = q
       .map((p) => {
-        const safe = String(p.id).replace(/[^a-zA-Z0-9_-]/g, "_");
         const n = num(p.proposalCount);
         return `
           <div class="agents-queue-item">
             <div class="agents-queue-item-head">
               <span class="agents-queue-id">${esc(p.id)}</span>
               <span class="agents-queue-meta">${fmtInt(p.proposalCount)} proposal${n !== 1 ? "s" : ""}</span>
-              <span class="agents-queue-actions">
-                <button class="agents-queue-btn" data-id="${esc(p.id)}" data-action="archive"
-                  title="I applied this by hand — move to applied/">Archive</button>
-                <button class="agents-queue-btn agents-queue-btn--dismiss" data-id="${esc(p.id)}" data-action="dismiss"
-                  title="Skip — delete the proposal">Dismiss</button>
-              </span>
-              <span class="agents-status" id="agents-queue-status-${esc(safe)}"></span>
+              <span class="agents-queue-path">${esc(p.path || `${locations.memoryQueueDir || "memory/sync-queue"}/${p.id}.md`)}</span>
             </div>
             <details class="agents-queue-details">
               <summary>view proposal</summary>
@@ -380,7 +362,10 @@
     return `
       <section class="home-card agents-queue-card">
         ${head}
-        <div class="home-card-body">${items}</div>
+        <div class="home-card-body">
+          ${pathLine("queue", locations.memoryQueueDir || "memory/sync-queue")}
+          ${items}
+        </div>
       </section>`;
   }
 
@@ -393,6 +378,8 @@
 
     const data = agents.data;
     const agentList = data && Array.isArray(data.agents) ? data.agents : [];
+    const setup = data && data.setup ? data.setup : null;
+    const setupRoles = setup && Array.isArray(setup.roles) ? setup.roles : null;
     const usage = data && data.usage ? data.usage : {};
     const byRole = usage.byRole || {};
     const byModel = usage.byModel || {};
@@ -430,7 +417,7 @@
 
     const editorsHtml = agentList.length
       ? `<div class="agents-editor-grid">
-           ${agentList.map((a) => agentCard(a, byRole, codexConfig)).join("")}
+           ${(setupRoles || agentList).map((a) => agentCard(a, byRole, codexConfig)).join("")}
          </div>`
       : `<p class="home-empty">No agents found. <span class="home-na">/api/agents</span> returned an empty list.</p>`;
 
@@ -445,37 +432,16 @@
           <button class="agents-refresh-btn" id="agents-refresh" type="button">Refresh</button>
         </div>
         ${emptyNotice}
-        ${queueSection()}
-        ${data ? spendSection : ""}
+        ${data ? setupOverview(setup) : ""}
         ${data ? editorsHtml : ""}
+        ${data ? spendSection : ""}
+        ${queueSection()}
       </div>`;
 
     // Wire Refresh button
     const refreshBtn = $("#agents-refresh");
     if (refreshBtn) refreshBtn.addEventListener("click", fetchAgents);
 
-    // Wire memory-queue Archive/Dismiss buttons
-    root.querySelectorAll(".agents-queue-btn").forEach((btn) => {
-      btn.addEventListener("click", () =>
-        resolveQueue(btn.getAttribute("data-id"), btn.getAttribute("data-action"), btn)
-      );
-    });
-
-    // Mark dirty on any editor edit so idle auto-refresh pauses until you save.
-    root.querySelectorAll(".agents-input, .agents-textarea, .agents-select").forEach((el) => {
-      el.addEventListener("input", () => { agents.dirty = true; });
-      el.addEventListener("change", () => { agents.dirty = true; });
-    });
-
-    // Wire Save buttons — each button carries its role in data-role
-    root.querySelectorAll(".agents-save-btn").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        const role = btn.getAttribute("data-role");
-        const safeId = role.replace(/[^a-zA-Z0-9_-]/g, "_");
-        const statusEl = $(`#agents-status-${CSS.escape(safeId)}`);
-        saveAgent(role, statusEl, btn);
-      });
-    });
   }
 
   // -----------------------------------------------------------------------

@@ -273,6 +273,72 @@ function MetricRow({ label, children }: { label: string; children: React.ReactNo
   );
 }
 
+function setupRepoRows(setup: AnyObj | null) {
+  if (!setup) return [];
+  if (Array.isArray(setup.repoStatus) && setup.repoStatus.length) return setup.repoStatus;
+  return (setup.repos || []).map((key: string) => ({ key, exists: null, path: "" }));
+}
+
+function onboardingComplete(setup: AnyObj | null, ticketCount = 0) {
+  if (!setup) return false;
+  const rows = setupRepoRows(setup);
+  const hasRepos = Array.isArray(setup.repos) && setup.repos.length > 0;
+  const reposReachable = rows.length ? rows.every((repo: AnyObj) => repo.exists !== false) : hasRepos;
+  const restart = !!setup.requiresRestart || !!(setup.configuredActiveProject && setup.runtimeActiveProject && setup.configuredActiveProject !== setup.runtimeActiveProject);
+  return Boolean(
+    setup.configPath &&
+    setup.ticketsDirExists &&
+    setup.indexExists &&
+    setup.agentDirExists !== false &&
+    setup.memoryQueueDirExists !== false &&
+    hasRepos &&
+    reposReachable &&
+    !restart &&
+    (Number(setup.ticketCount || 0) > 0 || ticketCount > 0)
+  );
+}
+
+function slugProjectId(value: string) {
+  const slug = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return slug || "default";
+}
+
+function projectPayload(input: AnyObj) {
+  return {
+    name: input.name || input.id,
+    workspaceDir: input.workspaceDir || ".",
+    ticketsDir: "tickets",
+    ticketIdPrefix: (input.ticketIdPrefix || "DB").toUpperCase(),
+    repos: {
+      workspace: {
+        path: ".",
+        baseBranch: "main",
+        worktree: false,
+        role: "cross-repo",
+      },
+    },
+    statuses: DEFAULT_COLUMNS.map((item) => item.status),
+    agentDir: ".agents",
+    memoryQueueDir: "memory/sync-queue",
+    workPrompt: "scripts/work-ticket-prompt.md",
+    fixCiPrompt: "scripts/fix-ci-prompt.md",
+    fixConflictPrompt: "scripts/fix-conflict-prompt.md",
+    engines: {
+      default: input.preferredEngine && input.preferredEngine !== "unknown" ? input.preferredEngine : "claude",
+      allowed: ["claude", "codex"],
+    },
+    roles: {
+      "cross-repo": { model: "sonnet" },
+      architect: { model: "opus" },
+    },
+    roleByRepo: { workspace: "cross-repo" },
+  };
+}
+
 function App() {
   const [view, setViewState] = useState<View>(() => {
     try {
@@ -283,13 +349,14 @@ function App() {
     }
   });
   const [config, setConfig] = useState<AnyObj | null>(null);
+  const [setup, setSetup] = useState<AnyObj | null>(null);
   const [tickets, setTickets] = useState<AnyObj[]>([]);
   const [board, setBoard] = useState<AnyObj>({ armed: false, autopilot: false, wipLimit: 2, running: [], defaultEngine: "claude" });
   const [readyOnly, setReadyOnly] = useState(false);
   const [toast, setToastState] = useState("");
   const [openTicketId, setOpenTicketId] = useState<string | null>(null);
   const [creatingTicket, setCreatingTicket] = useState(false);
-  const [onboardingRefreshKey, setOnboardingRefreshKey] = useState(0);
+  const [importingNotes, setImportingNotes] = useState(false);
 
   const columns = useMemo(() => {
     const statuses = Array.isArray(config?.statuses) && config.statuses.length ? config.statuses : DEFAULT_COLUMNS.map((c) => c.status);
@@ -311,6 +378,7 @@ function App() {
   }, []);
 
   const loadConfig = useCallback(async () => setConfig(await getJSON("/api/config")), []);
+  const loadSetup = useCallback(async () => setSetup(await getJSON("/api/setup/status")), []);
   const loadTickets = useCallback(async () => setTickets((await getJSON("/api/tickets")) || []), []);
   const loadBoardState = useCallback(async () => {
     const next = await getJSON("/api/state");
@@ -318,8 +386,8 @@ function App() {
   }, []);
 
   const refresh = useCallback(async () => {
-    await Promise.all([loadConfig(), loadTickets(), loadBoardState()]);
-  }, [loadConfig, loadTickets, loadBoardState]);
+    await Promise.all([loadConfig(), loadSetup(), loadTickets(), loadBoardState()]);
+  }, [loadConfig, loadSetup, loadTickets, loadBoardState]);
 
   useEffect(() => {
     refresh();
@@ -398,8 +466,17 @@ function App() {
   }, [byId, handleLaunchResult, loadTickets, loadBoardState, showToast]);
 
   const createBoardStarterTicket = useCallback(async () => {
+    setViewState("board");
     setOpenTicketId(null);
     setCreatingTicket(true);
+    setImportingNotes(false);
+  }, []);
+
+  const openImportNotes = useCallback(() => {
+    setViewState("board");
+    setOpenTicketId(null);
+    setCreatingTicket(false);
+    setImportingNotes(true);
   }, []);
 
   const copyBoardSetupPrompt = useCallback(async () => {
@@ -475,6 +552,23 @@ function App() {
   }, []);
 
   const openTicket = openTicketId ? byId.get(openTicketId) : null;
+  const completeOnboarding = onboardingComplete(setup, tickets.length);
+
+  if (!completeOnboarding) {
+    return (
+      <>
+        <Onboarding
+          setup={setup}
+          config={config}
+          tickets={tickets}
+          refreshBoard={refresh}
+          setView={setView}
+          showToast={showToast}
+        />
+        {toast ? <div className="toast">{toast}</div> : null}
+      </>
+    );
+  }
 
   return (
     <>
@@ -499,6 +593,7 @@ function App() {
               <div className="wip">WIP &middot; <span>{(board.running || []).length}</span>/<span>{board.wipLimit || 2}</span></div>
               <button className={`ghost-btn${readyOnly ? " ghost-btn--on" : ""}`} type="button" aria-pressed={readyOnly} title="Show ready tickets only" onClick={() => setReadyOnly((v) => !v)}>Ready</button>
               <button className="ghost-btn" type="button" title="Create a reviewed ticket from the board" onClick={createBoardStarterTicket}>Create ticket</button>
+              <button className="ghost-btn" type="button" title="Copy an agent prompt that imports pasted notes into triage tickets" onClick={openImportNotes}>Import notes</button>
               <button className={`arm ${board.armed ? "arm--on" : "arm--off"}`} type="button" aria-pressed={!!board.armed} onClick={() => setArmed(!board.armed)}>
                 <span className="arm-dot" />
                 <span className="arm-label">{board.armed ? "Armed" : "Disarmed"}</span>
@@ -511,7 +606,7 @@ function App() {
           </header>
 
           <section className="view view-home" hidden={view !== "home"} role="tabpanel">
-            <HomeView active={view === "home"} />
+            <HomeView active={view === "home"} setView={setView} />
           </section>
           <section className="view view-board" hidden={view !== "board"} role="tabpanel">
             <BoardView
@@ -535,6 +630,7 @@ function App() {
               resumeSession={resumeSession}
               setView={setView}
               createBoardStarterTicket={createBoardStarterTicket}
+              openImportNotes={openImportNotes}
               copyBoardSetupPrompt={copyBoardSetupPrompt}
               showToast={showToast}
             />
@@ -583,6 +679,12 @@ function App() {
                 handleLaunchResult={handleLaunchResult}
               />
             ) : null}
+            {importingNotes ? (
+              <ImportNotesPanel
+                close={() => setImportingNotes(false)}
+                showToast={showToast}
+              />
+            ) : null}
           </section>
           <section className="view view-agents" hidden={view !== "agents"} role="tabpanel">
             <AgentsView active={view === "agents"} />
@@ -592,7 +694,6 @@ function App() {
           </section>
         </div>
       </div>
-      <Onboarding key={onboardingRefreshKey} refreshBoard={async () => { await refresh(); setOnboardingRefreshKey((v) => v + 1); }} setView={setView} />
       {toast ? <div className="toast">{toast}</div> : null}
     </>
   );
@@ -602,7 +703,7 @@ function BoardView(props: AnyObj) {
   const {
     tickets, columns, readyOnly, isReady, isBlocked, isSessionRunning, isQueued, isSessionPaused,
     resolveRole, roleModel, resolveEngine, boardDefaultEngine, codexModel, codexEffort,
-    moveTicket, openTicket, stopSession, resumeSession, setView, createBoardStarterTicket,
+    moveTicket, openTicket, stopSession, resumeSession, setView, createBoardStarterTicket, openImportNotes,
     copyBoardSetupPrompt, showToast,
   } = props;
 
@@ -612,6 +713,7 @@ function BoardView(props: AnyObj) {
         <BoardEmptyState
           setView={setView}
           createBoardStarterTicket={createBoardStarterTicket}
+          openImportNotes={openImportNotes}
           copyBoardSetupPrompt={copyBoardSetupPrompt}
           showToast={showToast}
         />
@@ -650,7 +752,7 @@ function BoardView(props: AnyObj) {
   );
 }
 
-function BoardEmptyState({ setView, createBoardStarterTicket, copyBoardSetupPrompt, showToast }: AnyObj) {
+function BoardEmptyState({ setView, createBoardStarterTicket, openImportNotes, copyBoardSetupPrompt }: AnyObj) {
   return (
     <section className="board-empty" aria-label="Board empty state">
       <div className="board-empty-main">
@@ -661,7 +763,7 @@ function BoardEmptyState({ setView, createBoardStarterTicket, copyBoardSetupProm
       <div className="board-empty-actions">
         <button className="board-empty-btn board-empty-btn--primary" type="button" onClick={() => setView("projects")}>Connect existing repo</button>
         <button className="board-empty-btn" type="button" onClick={createBoardStarterTicket}>Create ticket</button>
-        <button className="board-empty-btn" type="button" onClick={() => showToast("Import from notes is planned next; use Create ticket for now")}>Import from notes</button>
+        <button className="board-empty-btn" type="button" onClick={openImportNotes}>Import from notes</button>
         <button className="board-empty-btn" type="button" onClick={copyBoardSetupPrompt}>Copy setup prompt</button>
         <button className="board-empty-btn" type="button" onClick={() => setView("projects")}>Run doctor</button>
       </div>
@@ -746,7 +848,20 @@ function TicketCard(props: AnyObj) {
   const queued = isQueued(ticket);
   const paused = isSessionPaused(ticket);
   return (
-    <div className={`card${blocked ? " blocked" : ""}${running ? " running" : ""}${queued ? " queued" : ""}${paused ? " paused" : ""}`} data-id={ticket.id} onClick={() => openTicket(ticket.id)}>
+    <div
+      className={`card${blocked ? " blocked" : ""}${running ? " running" : ""}${queued ? " queued" : ""}${paused ? " paused" : ""}`}
+      data-id={ticket.id}
+      role="button"
+      tabIndex={0}
+      aria-label={`Open ticket ${ticket.id}: ${ticket.title || "Untitled ticket"}`}
+      onClick={() => openTicket(ticket.id)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          openTicket(ticket.id);
+        }
+      }}
+    >
       <div className="card-top">
         <span className="card-id">{ticket.id}</span>
         {priorityPill(ticket.priority)}
@@ -1235,21 +1350,156 @@ function TicketFormPanel({ mode, ticket, columns, validRepos, close, refresh, af
   );
 }
 
+function ImportNotesPanel({ close, showToast }: { close: () => void; showToast: (msg: string) => void }) {
+  const [notes, setNotes] = useState("");
+  const [contextRefs, setContextRefs] = useState("");
+  const [createImmediately, setCreateImmediately] = useState(true);
+  const [prompt, setPrompt] = useState("");
+  const [errors, setErrors] = useState<AnyObj>({});
+  const [busy, setBusy] = useState(false);
+
+  async function generate(copy = false) {
+    const cleanNotes = notes.trim();
+    if (!cleanNotes) {
+      setPrompt("");
+      setErrors({ notes: "Paste notes before generating a prompt." });
+      return;
+    }
+    setBusy(true);
+    setErrors({});
+    setPrompt("");
+    try {
+      const res = await fetch("/api/import/notes-prompt", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ notes: cleanNotes, contextRefs, createImmediately }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `Prompt failed (${res.status})`);
+      const nextPrompt = data.prompt || "";
+      setPrompt(nextPrompt);
+      if (copy) {
+        await navigator.clipboard.writeText(nextPrompt);
+        showToast("Import prompt copied");
+      } else {
+        showToast("Import prompt generated");
+      }
+    } catch (err: any) {
+      setErrors({ form: err.message });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function copyPrompt() {
+    if (!prompt) return generate(true);
+    try {
+      await navigator.clipboard.writeText(prompt);
+      showToast("Import prompt copied");
+    } catch (err: any) {
+      showToast(`Could not copy import prompt: ${err.message}`);
+    }
+  }
+
+  return (
+    <>
+      <div className="panel-overlay" onClick={close} />
+      <aside className="panel" aria-hidden="false">
+        <button className="panel-close" type="button" aria-label="Close" onClick={close}>&times;</button>
+        <div className="panel-body">
+          <span className="panel-id">Import</span>
+          <h2>Import from notes</h2>
+          <FieldError errors={errors} field="form" />
+          <div className="panel-section import-intro">
+            <p className="panel-desc">
+              Paste rough notes and copy a handoff prompt for your coding agent. The agent uses helm-create-ticket and writes triage tickets that you can review on the Board.
+            </p>
+          </div>
+
+          <form className="ticket-form" onSubmit={(e) => { e.preventDefault(); generate(false); }} noValidate>
+            <div className="panel-section">
+              <label className="panel-label" htmlFor="import-notes-text">Notes</label>
+              <textarea
+                className="panel-textarea import-notes-textarea"
+                id="import-notes-text"
+                rows={10}
+                placeholder="Paste roadmap notes, TODOs, bug reports, or open loops"
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+              />
+              <FieldError errors={errors} field="notes" />
+            </div>
+
+            <div className="panel-section">
+              <label className="panel-label" htmlFor="import-context-refs">Optional files or refs</label>
+              <textarea
+                className="panel-textarea"
+                id="import-context-refs"
+                rows={4}
+                placeholder="One Markdown, TODO, roadmap file, branch, URL, or doc ref per line"
+                value={contextRefs}
+                onChange={(e) => setContextRefs(e.target.value)}
+              />
+            </div>
+
+            <label className="check-row import-check">
+              <input type="checkbox" checked={createImmediately} onChange={(e) => setCreateImmediately(e.target.checked)} />
+              <span>Create triage tickets after the agent previews the proposed batch</span>
+            </label>
+
+            <div className="panel-form-actions">
+              <button className="primary-btn" type="submit" disabled={busy}>{busy ? "Generating..." : "Generate prompt"}</button>
+              <button className="ghost-btn" type="button" disabled={!prompt || busy} onClick={copyPrompt}>Copy prompt</button>
+              <button className="ghost-btn" type="button" onClick={close}>Cancel</button>
+            </div>
+          </form>
+
+          {prompt ? (
+            <div className="panel-section import-prompt-section">
+              <div className="panel-section-head">
+                <h3>Agent prompt</h3>
+                <button className="ghost-btn launch-preview-btn" type="button" onClick={copyPrompt}>Copy</button>
+              </div>
+              <textarea className="panel-textarea import-prompt-output" readOnly rows={14} value={prompt} />
+              <p className="panel-hint">After the agent validates and writes tickets, refresh the Board and review the new triage cards before moving anything forward.</p>
+            </div>
+          ) : null}
+        </div>
+      </aside>
+    </>
+  );
+}
+
 function PanelSection({ title, children }: { title: string; children: React.ReactNode }) {
   return <div className="panel-section"><h3>{title}</h3>{children}</div>;
 }
 
-function HomeView({ active }: { active: boolean }) {
+function HomeView({ active, setView }: { active: boolean; setView: (view: View) => void }) {
+  const [setup, setSetup] = useState<AnyObj | null>(null);
+  const [config, setConfig] = useState<AnyObj | null>(null);
+  const [board, setBoard] = useState<AnyObj | null>(null);
   const [usage, setUsage] = useState<AnyObj | null>(null);
   const [scheduler, setScheduler] = useState<AnyObj | null>(null);
   const [runs, setRuns] = useState<AnyObj[] | null>(null);
+  const [tickets, setTickets] = useState<AnyObj[] | null>(null);
   const [now, setNow] = useState(Date.now());
 
   const poll = useCallback(async () => {
-    const [u, s, r] = await Promise.all([getJSON("/api/usage"), getJSON("/api/scheduler"), getJSON("/api/runs")]);
-    setUsage(u);
+    const [setupNext, configNext, boardNext, s, r, t] = await Promise.all([
+      getJSON("/api/setup/status"),
+      getJSON("/api/config"),
+      getJSON("/api/state"),
+      getJSON("/api/scheduler"),
+      getJSON("/api/runs"),
+      getJSON("/api/tickets"),
+    ]);
+    setSetup(setupNext);
+    setConfig(configNext);
+    setBoard(boardNext);
     setScheduler(s);
     setRuns(Array.isArray(r) ? r : r == null ? null : []);
+    setTickets(Array.isArray(t) ? t : t == null ? null : []);
+    setUsage(await getJSON("/api/usage"));
   }, []);
 
   useEffect(() => {
@@ -1273,6 +1523,39 @@ function HomeView({ active }: { active: boolean }) {
     if (res?.ok) setScheduler(await res.json());
   }
 
+  async function initializeFolders() {
+    await fetch("/api/setup/init", { method: "POST" }).catch(() => null);
+    poll();
+  }
+
+  async function createStarterTicket() {
+    const repo = setup?.repos?.[0] || config?.repos?.[0] || "workspace";
+    const res = await fetch("/api/tickets", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        title: "First HelmMate ticket",
+        repo,
+        priority: "P2",
+        status: "triage",
+        description: "Created from the Home readiness checklist.",
+        acceptance_criteria: ["Ticket appears on the board"],
+      }),
+    }).catch(() => null);
+    await poll();
+    if (res?.ok) setView("board");
+  }
+
+  async function armBoard() {
+    const res = await fetch("/api/arm", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ armed: true }),
+    }).catch(() => null);
+    if (res?.ok) setBoard(await res.json());
+    poll();
+  }
+
   async function dispatchTicketFix(ticket: string, kind: string, pr: string) {
     await fetch(`/api/tickets/${encodeURIComponent(ticket)}/fix`, {
       method: "POST",
@@ -1289,88 +1572,166 @@ function HomeView({ active }: { active: boolean }) {
   const breaker = scheduler?.breaker;
   const liveRuns = (runs || []).filter((r) => r?.status === "running");
   const finished = (runs || []).filter((r) => r?.status && r.status !== "running").slice(0, 8);
+  const selectedEngine = (() => {
+    const allowed = Array.isArray(config?.engines) && config.engines.length ? config.engines : ["claude", "codex"];
+    if (allowed.includes(board?.defaultEngine)) return board?.defaultEngine;
+    if (allowed.includes(config?.defaultEngine)) return config?.defaultEngine;
+    return "claude";
+  })();
+  const hasRunHistory = (Array.isArray(runs) && runs.length > 0) || (Array.isArray(scheduler?.running) && scheduler.running.length > 0);
+  const ticketList = Array.isArray(tickets) ? tickets : [];
+  const byId = new Map(ticketList.map((t) => [t.id, t]));
+  const validRepos = new Set(Array.isArray(config?.repos) && config.repos.length ? config.repos : setup?.repos || []);
+  const runningIds = new Set([...(Array.isArray(board?.running) ? board.running : []), ...(Array.isArray(scheduler?.running) ? scheduler.running : [])]);
+  const repoRows = Array.isArray(setup?.repoStatus) && setup.repoStatus.length
+    ? setup.repoStatus
+    : Array.from(validRepos).map((key) => ({ key, exists: null, path: "" }));
+  const projectConfigured = !!setup?.configPath && (validRepos.size > 0 || !!config?.activeProject || !!setup?.activeProject);
+  const reposReady = validRepos.size > 0 && repoRows.every((repo: AnyObj) => repo.exists !== false);
+  const supportFoldersReady = setup?.agentDirExists !== false && setup?.memoryQueueDirExists !== false;
+  const restart = !!setup?.requiresRestart || !!(setup?.configuredActiveProject && setup?.runtimeActiveProject && setup.configuredActiveProject !== setup.runtimeActiveProject);
+  const launchReady = ticketList.filter((ticket) => {
+    const deps = Array.isArray(ticket?.depends_on) ? ticket.depends_on : [];
+    const unmet = deps.some((id: string) => !byId.get(id) || byId.get(id).status !== "done");
+    if (!["triage", "backlog"].includes(ticket?.status)) return false;
+    if (runningIds.has(ticket.id) || unmet || !validRepos.has(ticket.repo)) return false;
+    return ticket.status === "triage" || (Array.isArray(ticket.acceptance_criteria) && ticket.acceptance_criteria.length > 0);
+  });
 
-  return (
-    <main className="home">
-      {breaker?.tripped ? (
-        <div className="home-breaker" role="alert">
-          <div className="home-breaker-main">
-            <span className="home-breaker-flag">Usage paused</span>
-            <span className="home-breaker-reason">{shortReason(breaker.reason)}. Auto-dispatch is off until <strong>{breaker.until ? new Date(breaker.until).toLocaleTimeString() : "manual reset"}</strong>.</span>
-          </div>
-          <button className="home-breaker-reset" type="button" onClick={resetBreaker}>Reset breaker</button>
+  const stage = hasRunHistory
+    ? "runs"
+    : !projectConfigured
+    ? "no-project"
+    : !setup?.ticketsDirExists || !setup?.indexExists || !supportFoldersReady || !reposReady || restart
+    ? "folders-missing"
+    : !ticketList.length
+    ? "no-tickets"
+    : !launchReady.length
+    ? "none-launch-ready"
+    : "launch-ready";
+
+  function BreakerBanner() {
+    if (!breaker?.tripped) return null;
+    return (
+      <div className="home-breaker" role="alert">
+        <div className="home-breaker-main">
+          <span className="home-breaker-flag">Usage paused</span>
+          <span className="home-breaker-reason">{shortReason(breaker.reason)}. Auto-dispatch is off until <strong>{breaker.until ? new Date(breaker.until).toLocaleTimeString() : "manual reset"}</strong>.</span>
         </div>
-      ) : null}
-      <div className="home-grid">
-        <HomeCard title="5h Block Usage" sub={usage?.asOf ? relTime(usage.asOf) : ""}>
-          {!usage || !block ? <p className="home-empty">No usage data. <span className="home-na">/api/usage</span> not available.</p> : !official ? (
-            <>
-              <div className="home-big"><span className="home-big-num home-big--muted">-</span><span className="home-big-label">live 5h usage unavailable</span></div>
-              <div className="home-note">Claude usage endpoint unavailable. Retrying quietly.</div>
-              <div className="home-note home-dim">Local transcript totals are hidden here because they are not comparable to the real limit.</div>
-            </>
-          ) : (
-            <>
-              <div className="home-big"><span className="home-big-num">{fmtPct(block.pct)}</span><span className="home-big-label">of 5h limit</span></div>
-              <Gauge pct={block.pct} />
-              <div className="home-usage-line"><span className="home-src home-src--live">● LIVE</span> <span className="home-dim">Anthropic usage API · real 5h limit</span></div>
-              <div className="home-note">live · Anthropic usage endpoint</div>
-              <div className="home-countdown"><span className="home-countdown-label">RESETS IN</span><span className={`home-countdown-val${resetAt && resetAt - now < 15 * 60000 ? " home-countdown-val--soon" : ""}`}>{resetAt ? fmtClock(resetAt - now) : "-"}</span></div>
-            </>
-          )}
-        </HomeCard>
+        <button className="home-breaker-reset" type="button" onClick={resetBreaker}>Reset breaker</button>
+      </div>
+    );
+  }
 
-        <HomeCard title={usage?.codex ? "Codex Usage" : "Burn Rate"} sub={usage?.codex?.asOf ? relTime(usage.codex.asOf) : ""}>
-          {usage?.codex ? (
-            <>
-              <div className="home-big home-big--sm"><span className="home-big-num">{fmtPct(usage.codex.primary?.pct)}</span><span className="home-big-label">5h window</span></div>
-              <Gauge pct={usage.codex.primary?.pct} />
-              <div className="home-dispatch-grid">
-                <MetricRow label="7d window">{fmtPct(usage.codex.secondary?.pct)}</MetricRow>
-                <MetricRow label="resets">{untilTime(usage.codex.primary?.resetTime)}</MetricRow>
-                <MetricRow label="plan">{usage.codex.planType || "Codex"}</MetricRow>
-                <MetricRow label="source"><span className="home-src home-src--live">local</span></MetricRow>
-              </div>
-            </>
-          ) : (
-            <>
-              <div className="home-big home-big--sm"><span className="home-big-num">{fmtTokens(block?.burnTokensPerMin)}</span><span className="home-big-label">tokens / min <span className="home-dim">(local)</span></span></div>
-              <div className="home-note">local trend signal only</div>
-            </>
-          )}
-        </HomeCard>
+  function BlockCard({ quiet = false }: { quiet?: boolean }) {
+    const quietClaude = quiet || selectedEngine !== "claude";
+    return (
+      <HomeCard title="5h Block Usage" sub={!usage || !block ? (quietClaude ? "secondary" : "") : usage?.asOf ? relTime(usage.asOf) : ""}>
+        {!usage || !block ? (
+          <p className="home-empty">{quietClaude ? "Claude usage is secondary for the current engine." : <>No usage data. <span className="home-na">/api/usage</span> not available.</>}</p>
+        ) : !official ? quietClaude ? (
+          <>
+            <p className="home-empty home-empty--inline">Claude usage is secondary for the current engine.</p>
+            <div className="home-note home-dim">Live Claude usage is retrying quietly.</div>
+          </>
+        ) : (
+          <>
+            <div className="home-big"><span className="home-big-num home-big--muted">-</span><span className="home-big-label">live 5h usage unavailable</span></div>
+            <div className="home-note">Claude usage endpoint unavailable. Retrying quietly.</div>
+            <div className="home-note home-dim">Local transcript totals are hidden here because they are not comparable to the real limit.</div>
+          </>
+        ) : (
+          <>
+            <div className="home-big"><span className="home-big-num">{fmtPct(block.pct)}</span><span className="home-big-label">of 5h limit</span></div>
+            <Gauge pct={block.pct} />
+            <div className="home-usage-line"><span className="home-src home-src--live">● LIVE</span> <span className="home-dim">Anthropic usage API · real 5h limit</span></div>
+            <div className="home-note">live · Anthropic usage endpoint</div>
+            <div className="home-countdown"><span className="home-countdown-label">RESETS IN</span><span className={`home-countdown-val${resetAt && resetAt - now < 15 * 60000 ? " home-countdown-val--soon" : ""}`}>{resetAt ? fmtClock(resetAt - now) : "-"}</span></div>
+          </>
+        )}
+      </HomeCard>
+    );
+  }
 
-        <HomeCard title="Weekly Usage">
-          {!weekly ? <p className="home-empty">No weekly data.</p> : weekly.source !== "official" ? (
-            <>
-              <div className="home-big home-big--sm"><span className="home-big-num home-big--muted">-</span><span className="home-big-label">live 7d usage unavailable</span></div>
-              <div className="home-note">Claude usage endpoint unavailable. Retrying quietly.</div>
-            </>
-          ) : (
-            <>
-              <div className="home-big home-big--sm"><span className="home-big-num">{fmtPct(weekly.pct)}</span><span className="home-big-label">of 7d limit</span></div>
-              <Gauge pct={weekly.pct} />
-              <div className="home-usage-line"><span className="home-src home-src--live">● LIVE</span> <span className="home-dim">7-day window · Anthropic usage API</span></div>
-            </>
-          )}
+  function CodexOrBurnCard({ quiet = false }: { quiet?: boolean }) {
+    if (usage?.codex) {
+      return (
+        <HomeCard title="Codex Usage" sub={usage.codex.asOf ? relTime(usage.codex.asOf) : ""}>
+          <div className="home-big home-big--sm"><span className="home-big-num">{fmtPct(usage.codex.primary?.pct)}</span><span className="home-big-label">5h window</span></div>
+          <Gauge pct={usage.codex.primary?.pct} />
+          <div className="home-dispatch-grid">
+            <MetricRow label="7d window">{fmtPct(usage.codex.secondary?.pct)}</MetricRow>
+            <MetricRow label="resets">{untilTime(usage.codex.primary?.resetTime)}</MetricRow>
+            <MetricRow label="plan">{usage.codex.planType || "Codex"}</MetricRow>
+            <MetricRow label="source"><span className="home-src home-src--live">local</span></MetricRow>
+          </div>
         </HomeCard>
+      );
+    }
+    if (quiet && selectedEngine === "codex") {
+      return (
+        <HomeCard title="Codex Usage" sub="quiet">
+          <p className="home-empty home-empty--inline">Codex usage appears after local session data is available.</p>
+          <div className="home-note home-dim">Claude burn data is secondary for the current engine.</div>
+        </HomeCard>
+      );
+    }
+    return (
+      <HomeCard title="Burn Rate">
+        {!block ? <p className="home-empty">No burn data. <span className="home-na">/api/usage</span> not available.</p> : (
+          <>
+            <div className="home-big home-big--sm"><span className="home-big-num">{fmtTokens(block?.burnTokensPerMin)}</span><span className="home-big-label">tokens / min <span className="home-dim">(local)</span></span></div>
+            <div className="home-note">local trend signal only</div>
+          </>
+        )}
+      </HomeCard>
+    );
+  }
 
-        <HomeCard title="Dispatch">
-          {!scheduler ? <p className="home-empty">Scheduler offline. <span className="home-na">/api/scheduler</span> not available.</p> : (
-            <>
-              <div className="home-dispatch-top">
-                <span className={`home-pill ${!scheduler.autopilot ? "home-pill--off" : "home-pill--on"}`}>{scheduler.autopilot ? "ON" : "OFF"}</span>
-                <button type="button" className={`home-toggle ${scheduler.autopilot ? "home-toggle--on" : "home-toggle--off"}`} onClick={toggleAutopilot}>
-                  <span className="home-toggle-dot" />{scheduler.autopilot ? "Autopilot ON" : "Autopilot OFF"}
-                </button>
-              </div>
-              <div className="home-dispatch-grid">
-                <MetricRow label="mode">{scheduler.mode === "night" ? "Night" : "Day"}{scheduler.nightOnly ? " · night-only" : ""}</MetricRow>
-                <MetricRow label="active cap">{fmtFractionPct(scheduler.activeCapPct)}</MetricRow>
-                <MetricRow label="next poll">{num(scheduler.nextPollInSec) != null ? fmtMin(num(scheduler.nextPollInSec)! / 60) : "-"}</MetricRow>
-                <MetricRow label="WIP limit">{fmtInt(scheduler.wipLimit)}</MetricRow>
-              </div>
-              <div className="home-sub-head">Recent decisions</div>
+  function WeeklyCard({ quiet = false }: { quiet?: boolean }) {
+    const quietClaude = quiet || selectedEngine !== "claude";
+    return (
+      <HomeCard title="Weekly Usage" sub={quietClaude && (!weekly || weekly.source !== "official") ? "secondary" : ""}>
+        {!weekly ? <p className="home-empty">{quietClaude ? "Claude weekly usage is secondary for the current engine." : "No weekly data."}</p> : weekly.source !== "official" ? quietClaude ? (
+          <>
+            <p className="home-empty home-empty--inline">Claude weekly usage is secondary for the current engine.</p>
+            <div className="home-note home-dim">Live Claude usage is retrying quietly.</div>
+          </>
+        ) : (
+          <>
+            <div className="home-big home-big--sm"><span className="home-big-num home-big--muted">-</span><span className="home-big-label">live 7d usage unavailable</span></div>
+            <div className="home-note">Claude usage endpoint unavailable. Retrying quietly.</div>
+          </>
+        ) : (
+          <>
+            <div className="home-big home-big--sm"><span className="home-big-num">{fmtPct(weekly.pct)}</span><span className="home-big-label">of 7d limit</span></div>
+            <Gauge pct={weekly.pct} />
+            <div className="home-usage-line"><span className="home-src home-src--live">● LIVE</span> <span className="home-dim">7-day window · Anthropic usage API</span></div>
+          </>
+        )}
+      </HomeCard>
+    );
+  }
+
+  function DispatchCard() {
+    return (
+      <HomeCard title="Dispatch">
+        {!scheduler ? <p className="home-empty">Scheduler offline. <span className="home-na">/api/scheduler</span> not available.</p> : (
+          <>
+            <div className="home-dispatch-top">
+              <span className={`home-pill ${!scheduler.autopilot ? "home-pill--off" : scheduler.armed ? "home-pill--on" : "home-pill--warn"}`}>{!scheduler.autopilot ? "OFF" : scheduler.armed ? "ON" : "PAUSED"}</span>
+              <button type="button" className={`home-toggle ${scheduler.autopilot ? "home-toggle--on" : "home-toggle--off"}`} onClick={toggleAutopilot}>
+                <span className="home-toggle-dot" />{scheduler.autopilot ? "Autopilot ON" : "Autopilot OFF"}
+              </button>
+            </div>
+            <div className="home-dispatch-grid">
+              <MetricRow label="mode">{scheduler.mode === "night" ? "Night" : "Day"}{scheduler.nightOnly ? " · night-only" : ""}</MetricRow>
+              <MetricRow label="active cap">{fmtFractionPct(scheduler.activeCapPct)}</MetricRow>
+              <MetricRow label="next poll">{num(scheduler.nextPollInSec) != null ? fmtMin(num(scheduler.nextPollInSec)! / 60) : "-"}</MetricRow>
+              <MetricRow label="WIP limit">{fmtInt(scheduler.wipLimit)}</MetricRow>
+            </div>
+            <div className="home-sub-head">Recent decisions</div>
+            {scheduler.lastDecisions?.length ? (
               <ul className="home-list">
                 {(scheduler.lastDecisions || []).slice(-4).reverse().map((d: AnyObj, idx: number) => (
                   <li key={idx}>
@@ -1381,9 +1742,103 @@ function HomeView({ active }: { active: boolean }) {
                   </li>
                 ))}
               </ul>
-            </>
-          )}
-        </HomeCard>
+            ) : <p className="home-empty home-empty--inline">No recent decisions.</p>}
+          </>
+        )}
+      </HomeCard>
+    );
+  }
+
+  function ReadinessHome() {
+    const copy: AnyObj = {
+      "no-project": ["first run", "Connect a project", "Choose or create a project configuration before HelmMate can prepare tickets."],
+      "folders-missing": ["setup", "Prepare local folders", "Create the ticket index and support folders, then confirm repos are reachable."],
+      "no-tickets": ["ready", "Create a first ticket", "The project is ready for tickets. Start with one reviewed, small task."],
+      "none-launch-ready": ["needs review", "Review tickets", "Tickets exist, but none currently satisfy the launch checks."],
+      "launch-ready": ["launch-ready", "Ready to launch", "At least one ticket can launch once the board is armed and dispatch is enabled."],
+    };
+    const [kicker, title, detail] = copy[stage] || copy["no-project"];
+    const repoDetail = repoRows.length
+      ? repoRows.map((repo: AnyObj) => `${repo.key}: ${repo.exists === true ? "ok" : repo.exists === false ? "missing" : "configured"}${repo.path ? ` (${repo.path})` : ""}`).join("; ")
+      : "none";
+    const step = (ok: boolean, label: string, value: string, tone = "") => (
+      <li className={`${ok ? "projects-step projects-step--done" : "projects-step"}${tone ? ` projects-step--${tone}` : ""}`} key={label}>
+        <span className="projects-step-dot" /><span className="projects-step-main">{label}</span><span className="projects-step-detail">{value}</span>
+      </li>
+    );
+    let lead = "Open Projects to connect a workspace.";
+    let actions: React.ReactNode = <button className="projects-btn projects-btn--primary" type="button" onClick={() => setView("projects")}>Open Projects</button>;
+    if (stage === "folders-missing") {
+      lead = restart ? "Restart the server after the selected project change, then refresh Home." : "Initialize the local ticket and agent folders.";
+      actions = <><button className="projects-btn projects-btn--primary" type="button" onClick={initializeFolders}>Initialize folders</button><button className="projects-btn" type="button" onClick={() => setView("projects")}>Open Projects</button><button className="projects-btn" type="button" onClick={poll}>Refresh</button></>;
+    } else if (stage === "no-tickets") {
+      lead = "Create a small starter ticket, then review it on the Board.";
+      actions = <><button className="projects-btn projects-btn--primary" type="button" onClick={createStarterTicket}>Create starter ticket</button><button className="projects-btn" type="button" onClick={() => setView("board")}>Open Board</button><button className="projects-btn" type="button" onClick={() => setView("projects")}>Open Projects</button></>;
+    } else if (stage === "none-launch-ready") {
+      lead = "Review ticket status, dependencies, repo, and acceptance criteria.";
+      actions = <><button className="projects-btn projects-btn--primary" type="button" onClick={() => setView("board")}>Review Board</button><button className="projects-btn" type="button" onClick={createStarterTicket}>Create starter ticket</button><button className="projects-btn" type="button" onClick={() => setView("projects")}>Run Doctor</button></>;
+    } else if (stage === "launch-ready") {
+      const armed = !!board?.armed;
+      const autopilot = !!scheduler?.autopilot;
+      lead = !armed ? "Arm the board when you want launch-ready tickets to run." : !autopilot ? "Enable autopilot to let the scheduler dispatch ready work." : "The scheduler can dispatch on its next poll.";
+      actions = <><button className="projects-btn projects-btn--primary" type="button" onClick={!armed ? armBoard : !autopilot ? toggleAutopilot : () => setView("board")}>{!armed ? "Arm board" : !autopilot ? "Enable autopilot" : "Open Board"}</button><button className="projects-btn" type="button" onClick={() => setView("board")}>Review Board</button><button className="projects-btn" type="button" onClick={poll}>Refresh</button></>;
+    }
+
+    return (
+      <>
+        <BreakerBanner />
+        <div className="home-ready-grid">
+          <HomeCard title="Home Readiness">
+            <div className="home-ready-hero"><span className="home-ready-kicker">{kicker}</span><h2>{title}</h2><p>{detail}</p></div>
+            <div className="home-ready-stats">
+              <MetricRow label="project">{setup?.activeProject || config?.activeProject || "none"}</MetricRow>
+              <MetricRow label="tickets">{fmtInt(ticketList.length)}</MetricRow>
+              <MetricRow label="launch-ready">{fmtInt(launchReady.length)}</MetricRow>
+              <MetricRow label="dispatch">{!launchReady.length ? "waiting" : board?.armed && scheduler?.autopilot ? "enabled" : board?.armed ? "arm on" : "disarmed"}</MetricRow>
+            </div>
+          </HomeCard>
+          <HomeCard title="Next Actions">
+            <p className="home-ready-lead">{lead}</p>
+            <div className="projects-actions">{actions}</div>
+            <div className="home-note home-dim">Home stays in readiness mode until a run is active or recorded.</div>
+          </HomeCard>
+          <HomeCard title="Readiness Checklist" sub={stage === "launch-ready" ? `${launchReady.length} ready` : "next check"}>
+            <ul className="projects-steps">
+              {step(projectConfigured, "Project config", setup?.configPath || "open Projects to configure")}
+              {step(!restart, "Active project", restart ? setup?.restartReason || "restart needed to load selected project" : setup?.runtimeActiveProject || setup?.activeProject || "loaded", restart ? "warn" : "")}
+              {step(!!setup?.ticketsDirExists, "Tickets directory", setup?.ticketsDir || "not configured")}
+              {step(!!setup?.indexExists, "Ticket index", setup?.indexExists ? "_index.json exists" : "missing or will be created")}
+              {step(setup?.agentDirExists !== false, "Agent folder", setup?.agentDir || "not configured")}
+              {step(setup?.memoryQueueDirExists !== false, "Memory queue", setup?.memoryQueueDir || "not configured")}
+              {step(reposReady, "Configured repos", repoDetail)}
+              {step(ticketList.length > 0, "Tickets", ticketList.length ? `${ticketList.length} found` : "none yet")}
+              {step(launchReady.length > 0, "Launch-ready tickets", launchReady.length ? launchReady.slice(0, 3).map((t) => t.id).join(", ") : ticketList.length ? "move a reviewed ticket to triage/backlog with deps done" : "create a starter ticket")}
+              {step(board?.armed === false, "Board starts safe", board?.armed === true ? "armed" : board?.armed === false ? "disarmed" : "unknown", board?.armed === true ? "warn" : "")}
+            </ul>
+          </HomeCard>
+          <DispatchCard />
+          <HomeCard title="Default Engine" sub="routing">
+            <div className="home-big home-big--sm"><span className="home-big-num">{selectedEngine === "codex" ? "Codex" : "Claude"}</span><span className="home-big-label">selected for launches</span></div>
+            <div className="home-note">{selectedEngine === "codex" ? "Claude usage is secondary while Codex is the default engine." : "Claude usage matters for Claude launches and scheduler caps."}</div>
+          </HomeCard>
+          {selectedEngine === "codex" ? <CodexOrBurnCard quiet /> : <BlockCard />}
+        </div>
+      </>
+    );
+  }
+
+  if (!hasRunHistory) {
+    return <main className="home"><ReadinessHome /></main>;
+  }
+
+  return (
+    <main className="home">
+      <BreakerBanner />
+      <div className={`home-grid${selectedEngine !== "claude" ? " home-grid--codex" : ""}`}>
+        {selectedEngine === "codex" ? <CodexOrBurnCard quiet /> : <BlockCard />}
+        {selectedEngine === "codex" ? <BlockCard quiet /> : <CodexOrBurnCard />}
+        <WeeklyCard quiet={selectedEngine !== "claude"} />
+        <DispatchCard />
 
         <HomeCard title="Running Now" sub={liveRuns.length ? String(liveRuns.length) : "idle"}>
           {liveRuns.length ? <ul className="home-list">{liveRuns.map((r) => <li key={r.run_id}><span className="home-list-main mono">{r.ticket_id || r.run_id}</span><span className="home-list-meta">{fmtTokens(r.tokens_metric)} tok</span><span className="home-list-meta home-dim">{fmtDuration(r.started_at, null)}</span></li>)}</ul> : <p className="home-empty home-empty--inline">Nothing running.</p>}
@@ -1427,41 +1882,125 @@ function AgentsView({ active }: { active: boolean }) {
     return () => window.clearInterval(timer);
   }, [active, refresh]);
 
-  async function resolveQueue(id: string, action: string) {
-    await fetch(`/api/memory-queue/${encodeURIComponent(id)}/resolve`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action }) }).catch(() => null);
-    refresh();
-  }
-
   const usage = data?.usage || {};
+  const setup = data?.setup || null;
+  const locations = setup?.locations || {};
   const pending = Array.isArray(queue?.pending) ? queue.pending : [];
+  const roles = Array.isArray(setup?.roles) && setup.roles.length ? setup.roles : data?.agents || [];
   return (
     <main className="agents">
       <div className="agents-view">
         <div className="agents-header"><h2 className="agents-title">Agents</h2><button className="agents-refresh-btn" type="button" onClick={refresh}>Refresh</button></div>
         {!data ? <p className="agents-error home-empty"><span className="home-na">/api/agents</span> not available - check server.</p> : null}
-        <section className="home-card agents-queue-card">
-          <div className="home-card-head"><h3>Memory proposals</h3><span className={`agents-queue-count${pending.length ? " agents-queue-count--has" : ""}`}>{pending.length ? `${pending.length} pending` : "none pending"}</span></div>
-          <div className="home-card-body">
-            {!pending.length ? <p className="home-empty">No pending proposals. Autonomous sessions drop durable learnings in <span className="home-na">memory/sync-queue/</span> for review; they appear here.</p> : pending.map((p: AnyObj) => (
-              <div className="agents-queue-item" key={p.id}>
-                <div className="agents-queue-item-head"><span className="agents-queue-id">{p.id}</span><span className="agents-queue-meta">{fmtInt(p.proposalCount)} proposals</span><span className="agents-queue-actions"><button className="agents-queue-btn" onClick={() => resolveQueue(p.id, "archive")}>Archive</button><button className="agents-queue-btn agents-queue-btn--dismiss" onClick={() => resolveQueue(p.id, "dismiss")}>Dismiss</button></span></div>
-                <details className="agents-queue-details"><summary>view proposal</summary><pre className="agents-queue-pre">{p.content}</pre></details>
-              </div>
-            ))}
-          </div>
-        </section>
         {data ? (
           <>
+            <AgentsSetupOverview setup={setup} />
+            <div className="agents-editor-grid">{roles.map((agent: AnyObj) => <AgentRoleCard key={agent.role} agent={agent} usageByRole={usage.byRole || {}} codexConfig={data.codex || {}} />)}</div>
             <div className="agents-spend-section">
               <SpendCard title="Spend by model" buckets={usage.byModel} kind="model" />
               <SpendCard title="Spend by role" buckets={usage.byRole} kind="role" />
               <SpendCard title="Spend by engine" buckets={usage.byEngine} kind="engine" hint="Codex bills against your ChatGPT plan - tokens are tracked, cost shows n/a." />
             </div>
-            <div className="agents-editor-grid">{(data.agents || []).map((agent: AnyObj) => <AgentEditor key={agent.role} agent={agent} usageByRole={usage.byRole || {}} codexConfig={data.codex || {}} refresh={refresh} />)}</div>
           </>
         ) : null}
+        <section className="home-card agents-queue-card">
+          <div className="home-card-head"><h3>Memory proposal location</h3><span className={`agents-queue-count${pending.length ? " agents-queue-count--has" : ""}`}>{pending.length ? `${pending.length} pending` : "none pending"}</span></div>
+          <div className="home-card-body">
+            <PathRow label="queue" value={locations.memoryQueueDir || "memory/sync-queue"} />
+            {!pending.length ? <p className="home-empty">No pending proposals. Autonomous sessions drop durable learnings here for human review.</p> : pending.map((p: AnyObj) => (
+              <div className="agents-queue-item" key={p.id}>
+                <div className="agents-queue-item-head"><span className="agents-queue-id">{p.id}</span><span className="agents-queue-meta">{fmtInt(p.proposalCount)} proposals</span><span className="agents-queue-path">{p.path || `${locations.memoryQueueDir || "memory/sync-queue"}/${p.id}.md`}</span></div>
+                <details className="agents-queue-details"><summary>view proposal</summary><pre className="agents-queue-pre">{p.content}</pre></details>
+              </div>
+            ))}
+          </div>
+        </section>
       </div>
     </main>
+  );
+}
+
+function StatusBadge({ ok, label }: { ok: boolean; label?: string }) {
+  return <span className={`agents-file-badge ${ok ? "agents-file-badge--ok" : "agents-file-badge--missing"}`}>{label || (ok ? "exists" : "missing")}</span>;
+}
+
+function PathRow({ label, value, ok }: { label: string; value?: string; ok?: boolean }) {
+  return (
+    <div className="agents-path-row">
+      <span>{label}</span>
+      <code>{value || "not configured"}</code>
+      {typeof ok === "boolean" ? <StatusBadge ok={ok} /> : null}
+    </div>
+  );
+}
+
+function AgentsSetupOverview({ setup }: { setup: AnyObj | null }) {
+  if (!setup) return null;
+  const engine = setup.engine || {};
+  const permissions = setup.permissions || {};
+  const locations = setup.locations || {};
+  const prompts = Array.isArray(setup.prompts) ? setup.prompts : [];
+  const routing = setup.roleRouting || {};
+  const mappings = Array.isArray(routing.repoMappings) ? routing.repoMappings : [];
+
+  return (
+    <section className="agents-setup-section">
+      <div className="agents-section-head"><h3>Before launch</h3><span>read-only setup review</span></div>
+      <div className="agents-trust-grid">
+        <section className="home-card agents-trust-card">
+          <div className="home-card-head"><h3>Default engine</h3><span className="agents-badge agents-badge--haiku">{engine.default || "unknown"}</span></div>
+          <div className="home-card-body">
+            <p className="agents-copy">{engine.explanation || ""}</p>
+            <div className="agents-kv-grid">
+              <div><span>board default</span><strong>{engine.default || "unknown"}</strong></div>
+              <div><span>config default</span><strong>{engine.configuredDefault || "unknown"}</strong></div>
+              <div><span>allowed</span><strong>{(engine.allowed || []).join(", ") || "none"}</strong></div>
+            </div>
+            <PathRow label="Claude command" value={engine.commands?.claude} />
+            <PathRow label="Codex command" value={engine.commands?.codex} />
+          </div>
+        </section>
+
+        <section className="home-card agents-trust-card agents-trust-card--wide">
+          <div className="home-card-head"><h3>Role routing</h3></div>
+          <div className="home-card-body">
+            <p className="agents-copy">{routing.explanation || ""}</p>
+            <table className="agents-routing-table">
+              <thead><tr><th>repo</th><th>role</th><th>mode</th><th>status</th></tr></thead>
+              <tbody>{mappings.length ? mappings.map((repo: AnyObj) => (
+                <tr key={repo.key}>
+                  <td>{repo.key}</td>
+                  <td>{repo.role || "cross-repo"}</td>
+                  <td>{repo.worktree ? "worktree" : "in-place"}</td>
+                  <td><StatusBadge ok={!!repo.exists} label={repo.exists ? "repo found" : "missing"} /></td>
+                </tr>
+              )) : <tr><td colSpan={4}>No repos configured.</td></tr>}</tbody>
+            </table>
+          </div>
+        </section>
+
+        <section className="home-card agents-trust-card">
+          <div className="home-card-head"><h3>Prompt files</h3></div>
+          <div className="home-card-body agents-path-stack">
+            {prompts.length ? prompts.map((p: AnyObj) => <PathRow key={p.key || p.label} label={p.label || p.key} value={`${p.ref || ""}${p.path ? ` -> ${p.path}` : ""}`} ok={!!p.exists} />) : <p className="home-empty">No prompt files configured.</p>}
+          </div>
+        </section>
+
+        <section className="home-card agents-trust-card agents-warning-card">
+          <div className="home-card-head"><h3>Permission warning</h3><StatusBadge ok={false} label="review" /></div>
+          <div className="home-card-body">
+            <p className="agents-copy">{permissions.text || ""}</p>
+            <div className="agents-path-stack">
+              <PathRow label="Claude flag" value={permissions.claude} />
+              <PathRow label="Codex flag" value={permissions.codex} />
+              <PathRow label="Run logs" value={locations.ticketLogPattern || locations.logsDir} />
+              <PathRow label="Runs ledger" value={locations.runsLedger} />
+              <PathRow label="Memory proposals" value={locations.memoryProposalPattern || locations.memoryQueueDir} />
+            </div>
+          </div>
+        </section>
+      </div>
+    </section>
   );
 }
 
@@ -1480,38 +2019,30 @@ function SpendCard({ title, buckets, kind, hint }: AnyObj) {
   );
 }
 
-function AgentEditor({ agent, usageByRole, codexConfig, refresh }: AnyObj) {
-  const [description, setDescription] = useState(agent.description || "");
-  const [model, setModel] = useState(agent.model || "sonnet");
-  const [body, setBody] = useState(agent.body || "");
-  const [status, setStatus] = useState("");
+function AgentRoleCard({ agent, usageByRole, codexConfig }: AnyObj) {
   const roleUsage = usageByRole?.[agent.role];
-  const m = String(agent.model || "").toLowerCase();
-  const badge = m.includes("sonnet") ? "agents-badge--sonnet" : m.includes("opus") ? "agents-badge--opus" : m.includes("haiku") ? "agents-badge--haiku" : "agents-badge--dim";
-
-  async function save() {
-    setStatus("Saving...");
-    const res = await fetch(`/api/agents/${encodeURIComponent(agent.role)}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ description, model, body }) });
-    if (res.ok) {
-      setStatus("saved");
-      refresh();
-    } else {
-      const e = await res.json().catch(() => ({}));
-      setStatus(`error: ${e.error || res.status}`);
-    }
-  }
+  const persona = agent.persona || agent;
+  const exists = agent.exists !== false && persona.exists !== false;
+  const preview = persona.preview != null ? persona.preview : agent.body || "";
+  const claude = agent.claude || {};
+  const codexModel = codexConfig.modelByRole?.[agent.role] || agent.codex?.model || "gpt-5.4-mini";
+  const codexEffort = codexConfig.effortByRole?.[agent.role] || agent.codex?.effort || "medium";
 
   return (
     <section className="home-card agents-editor-card">
-      <div className="home-card-head"><h3>{agent.role}</h3><span className={`agents-badge ${badge}`}>{agent.model || "unknown"}</span></div>
+      <div className="home-card-head"><h3>{agent.role}</h3><StatusBadge ok={exists} label={exists ? "persona found" : "persona missing"} /></div>
       <div className="home-card-body">
+        <p className="agents-copy">{agent.meaning || "Repo-specific implementation role."}</p>
         <div className="agents-runs-line">{roleUsage ? `${fmtInt(roleUsage.runs)} runs · ${fmtUSD(roleUsage.cost_usd, roleUsage.has_cost)}` : "no runs yet"}</div>
-        {codexConfig.modelByRole?.[agent.role] ? <div className="agents-codex-line">Codex default: <span>{codexConfig.modelByRole[agent.role]}</span> · <span>{codexConfig.effortByRole?.[agent.role] || "medium"}</span></div> : null}
-        <div className="agents-field-row"><label className="agents-label">model</label><select className="agents-select" value={model} onChange={(e) => setModel(e.target.value)}>{["sonnet", "opus", "haiku"].map((x) => <option key={x} value={x}>{x}</option>)}</select></div>
-        <div className="agents-field-col"><label className="agents-label">description</label><input className="agents-input" value={description} onChange={(e) => setDescription(e.target.value)} placeholder="One-line persona description..." /></div>
-        <div className="agents-field-col"><label className="agents-label">body</label><textarea className="agents-textarea" rows={14} value={body} onChange={(e) => setBody(e.target.value)} placeholder="Markdown body (everything after frontmatter)..." /></div>
-        <div className="agents-save-row"><button className="agents-save-btn" type="button" onClick={save}>Save</button><span className="agents-status">{status}</span></div>
-        <div className="agents-path home-note">{agent.path || ""}</div>
+        <div className="agents-model-grid">
+          <div><span>Claude model</span><strong>{claude.model || agent.model || agent.configuredModel || "sonnet"}</strong><small>{claude.source || (agent.model ? "persona frontmatter" : "role config")}</small></div>
+          <div><span>Codex model</span><strong>{codexModel}</strong><small>effort {codexEffort}</small></div>
+        </div>
+        <PathRow label="persona" value={persona.path || agent.path} ok={exists} />
+        <details className="agents-persona-details" open={exists && !!preview}>
+          <summary>persona preview</summary>
+          {exists && preview ? <pre className="agents-persona-pre">{preview}{persona.previewTruncated ? "\n..." : ""}</pre> : <p className="home-empty">Missing or empty persona file.</p>}
+        </details>
       </div>
     </section>
   );
@@ -1759,58 +2290,335 @@ function ProjectEngineField({ value }: { value: string }) {
   );
 }
 
-function Onboarding({ refreshBoard, setView }: { refreshBoard: () => Promise<void>; setView: (v: View) => void }) {
-  const [setup, setSetup] = useState<AnyObj | null>(null);
-  const [hidden, setHidden] = useState(true);
+function Onboarding({
+  setup,
+  config,
+  tickets,
+  refreshBoard,
+  setView,
+  showToast,
+}: {
+  setup: AnyObj | null;
+  config: AnyObj | null;
+  tickets: AnyObj[];
+  refreshBoard: () => Promise<void>;
+  setView: (v: View) => void;
+  showToast: (msg: string) => void;
+}) {
+  const [mode, setMode] = useState<"existing" | "new">("existing");
+  const [projectId, setProjectId] = useState("default");
+  const [projectName, setProjectName] = useState("Default");
+  const [workspaceDir, setWorkspaceDir] = useState(".");
+  const [ticketPrefix, setTicketPrefix] = useState("DB");
+  const [preferredEngine, setPreferredEngine] = useState("unknown");
+  const [starterTitle, setStarterTitle] = useState("First HelmMate ticket");
+  const [setupPrompt, setSetupPrompt] = useState("");
+  const [doctorPrompt, setDoctorPrompt] = useState("");
+  const [status, setStatus] = useState("Checking local setup...");
+  const [saving, setSaving] = useState(false);
+  const initialized = useRef(false);
 
   useEffect(() => {
-    (async () => {
-      const s = await getJSON("/api/setup/status");
-      setSetup(s);
-      const key = `devboard.onboarding.dismissed.${s?.activeProject || "default"}`;
-      let dismissed = false;
-      try { dismissed = localStorage.getItem(key) === "1"; } catch { /* ignore */ }
-      setHidden(dismissed || (!!s?.ready && s.ticketCount !== 0));
-    })();
-  }, []);
+    if (!setup) refreshBoard();
+  }, [setup, refreshBoard]);
 
-  function dismiss() {
-    try { localStorage.setItem(`devboard.onboarding.dismissed.${setup?.activeProject || "default"}`, "1"); } catch { /* ignore */ }
-    setHidden(true);
+  useEffect(() => {
+    if (initialized.current || (!setup && !config)) return;
+    const active = setup?.activeProject || config?.activeProject || "default";
+    const workspace = setup?.workspaceDir || config?.workspaceDir || ".";
+    setProjectId(active);
+    setProjectName(active === "default" ? "Default" : titleForStatus(active));
+    setWorkspaceDir(workspace);
+    setTicketPrefix(setup?.ticketIdPrefix || config?.ticketIdPrefix || "DB");
+    setPreferredEngine(config?.defaultEngine || "unknown");
+    setStatus(setup ? "Choose how HelmMate should attach to your work." : "Checking local setup...");
+    initialized.current = true;
+  }, [setup, config]);
+
+  const rows = setupRepoRows(setup);
+  const ticketCount = Number(setup?.ticketCount || 0) || tickets.length;
+  const restart = !!setup?.requiresRestart || !!(setup?.configuredActiveProject && setup?.runtimeActiveProject && setup.configuredActiveProject !== setup.runtimeActiveProject);
+  const hasRepos = Array.isArray(setup?.repos) && setup.repos.length > 0;
+  const reposReachable = rows.length ? rows.every((repo: AnyObj) => repo.exists !== false) : hasRepos;
+  const foldersReady = !!setup?.ticketsDirExists && !!setup?.indexExists && setup?.agentDirExists !== false && setup?.memoryQueueDirExists !== false;
+  const complete = onboardingComplete(setup, tickets.length);
+  const activeStep = !setup
+    ? 0
+    : restart
+    ? 2
+    : !setup.configPath || !hasRepos
+    ? 1
+    : !foldersReady || !reposReachable
+    ? 2
+    : ticketCount <= 0
+    ? 3
+    : 4;
+
+  const detail = rows.length
+    ? rows.map((repo: AnyObj) => `${repo.key}: ${repo.exists === true ? "ok" : repo.exists === false ? "missing" : "configured"}${repo.path ? ` (${repo.path})` : ""}`).join("; ")
+    : "workspace repo will be configured";
+
+  function updateName(value: string) {
+    setProjectName(value);
+    if (projectId === "default" || projectId === slugProjectId(projectName)) setProjectId(slugProjectId(value));
   }
 
-  async function initialize() {
-    await fetch("/api/setup/init", { method: "POST" }).catch(() => null);
-    setSetup(await getJSON("/api/setup/status"));
-    setHidden(false);
-  }
-
-  async function createTicket() {
-    const title = (document.getElementById("onboarding-title") as HTMLInputElement)?.value.trim() || "First HelmMate ticket";
-    const res = await fetch("/api/tickets", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title, repo: setup?.repos?.[0] || "workspace", priority: "P2", status: "triage", description: "Created from the onboarding overlay.", acceptance_criteria: ["Ticket appears on the board"] }) }).catch(() => null);
-    if (res?.ok) {
-      dismiss();
-      await refreshBoard();
-      setView("board");
+  async function writeClipboard(text: string, success: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+      setStatus(success);
+      showToast(success);
+      return true;
+    } catch {
+      setStatus("Generated prompt. Copy it from the text area below.");
+      return false;
     }
   }
 
-  if (hidden || !setup) return null;
+  function currentProject() {
+    const id = slugProjectId(projectId || projectName || workspaceDir);
+    return {
+      id,
+      name: projectName.trim() || titleForStatus(id),
+      workspaceDir: workspaceDir.trim() || ".",
+      ticketIdPrefix: ticketPrefix.trim().toUpperCase() || "DB",
+      preferredEngine,
+    };
+  }
+
+  async function saveProject() {
+    const q = currentProject();
+    setSaving(true);
+    setStatus("Saving project...");
+    try {
+      const saveRes = await fetch(`/api/projects/${encodeURIComponent(q.id)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(projectPayload(q)),
+      });
+      const saveBody = await saveRes.json().catch(() => ({}));
+      if (!saveRes.ok) throw new Error(saveBody.error || `Save failed (${saveRes.status})`);
+      const activeRes = await fetch("/api/projects/active", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: q.id }),
+      });
+      const activeBody = await activeRes.json().catch(() => ({}));
+      if (!activeRes.ok) throw new Error(activeBody.error || `Activate failed (${activeRes.status})`);
+      setProjectId(q.id);
+      setStatus(activeBody.requiresRestart ? "Project saved. Restart the server, then refresh this page to load the new path." : "Project saved. Continue with local setup.");
+      await refreshBoard();
+    } catch (err: any) {
+      setStatus(`Could not save project: ${err.message}`);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function generateSetupPrompt(copy = false) {
+    const q = currentProject();
+    setStatus("Generating agent handoff...");
+    try {
+      const res = await fetch("/api/setup/agent-prompt", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mode,
+          projectId: q.id,
+          name: q.name,
+          workspaceDir: q.workspaceDir,
+          ticketIdPrefix: q.ticketIdPrefix,
+          preferredEngine: q.preferredEngine,
+        }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || `Prompt failed (${res.status})`);
+      const prompt = body.prompt || "";
+      setSetupPrompt(prompt);
+      if (copy) await writeClipboard(prompt, "Setup prompt copied.");
+      else setStatus("Setup prompt generated. Review it, then hand it to your coding agent.");
+    } catch (err: any) {
+      setStatus(`Could not generate setup prompt: ${err.message}`);
+    }
+  }
+
+  async function copySetupPrompt() {
+    if (!setupPrompt) {
+      await generateSetupPrompt(true);
+      return;
+    }
+    await writeClipboard(setupPrompt, "Setup prompt copied.");
+  }
+
+  async function initializeFolders() {
+    setStatus("Initializing local folders...");
+    const res = await fetch("/api/setup/init", { method: "POST" }).catch(() => null);
+    await refreshBoard();
+    setStatus(res?.ok ? "Local folders initialized." : "Could not initialize folders. Check the server console.");
+  }
+
+  async function createStarterTicket() {
+    setStatus("Creating starter ticket...");
+    try {
+      const result = await postTicket({
+        title: starterTitle.trim() || "First HelmMate ticket",
+        repo: setup?.repos?.[0] || config?.repos?.[0] || "workspace",
+        priority: "P2",
+        status: "triage",
+        description: "Created from the HelmMate onboarding flow.",
+        acceptance_criteria: ["Ticket appears on the board", "The ticket is ready for a human review before agent launch"],
+      });
+      setStatus(`${result.ticket.id} created. HelmMate is ready.`);
+      await refreshBoard();
+    } catch (err: any) {
+      setStatus(`Could not create ticket: ${err.message}`);
+    }
+  }
+
+  async function generateDoctorPrompt(copy = false) {
+    setStatus("Generating Doctor prompt...");
+    try {
+      const res = await fetch("/api/setup/doctor-prompt", { method: "POST" });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || `Prompt failed (${res.status})`);
+      const prompt = body.prompt || "";
+      setDoctorPrompt(prompt);
+      if (copy) await writeClipboard(prompt, "Doctor prompt copied.");
+      else setStatus("Doctor prompt generated.");
+    } catch (err: any) {
+      setStatus(`Could not generate Doctor prompt: ${err.message}`);
+    }
+  }
+
+  async function enterWorkspace() {
+    await refreshBoard();
+    if (!onboardingComplete(await getJSON("/api/setup/status"), tickets.length)) {
+      setStatus("A setup check is still incomplete. Refresh after any agent or server work finishes.");
+      return;
+    }
+    setView("board");
+  }
+
+  const step = (idx: number, label: string, value: string) => (
+    <li className={`onboarding-step${activeStep > idx ? " onboarding-step--done" : ""}${activeStep === idx ? " onboarding-step--active" : ""}`}>
+      <span className="onboarding-dot" />
+      <span className="onboarding-step-label">{label}</span>
+      <span className="onboarding-step-detail">{value}</span>
+    </li>
+  );
+
   return (
-    <div className="onboarding">
-      <div className="onboarding-backdrop" />
-      <section className="onboarding-panel" role="dialog" aria-modal="true" aria-label="Set up HelmMate">
-        <div className="onboarding-head"><div><span className="onboarding-kicker">First run</span><h2>Set up your local board</h2></div><button className="onboarding-close" type="button" aria-label="Close" onClick={dismiss}>&times;</button></div>
-        <p className="onboarding-copy">HelmMate starts disarmed. Set up local folders, create a first ticket, then arm the board only when you want agent launches.</p>
+    <main className="onboarding" aria-label="HelmMate onboarding">
+      <div className="onboarding-bg" />
+      <section className="onboarding-hero">
+        <div className="onboarding-brand">
+          <span className="brand-mark" />
+          <span className="brand-name">HelmMate</span>
+        </div>
+        <span className="onboarding-kicker">First run</span>
+        <h1>Set up your AI development cockpit.</h1>
+        <p className="onboarding-copy">Connect a project folder, let your coding agent verify the workspace, create the first reviewed ticket, then enter the board with launches still disarmed.</p>
+        <div className="onboarding-mode-grid" role="group" aria-label="Project setup mode">
+          <button className={`onboarding-mode${mode === "existing" ? " onboarding-mode--active" : ""}`} type="button" onClick={() => setMode("existing")}>
+            <span>Connect folder</span>
+            <small>Use an existing local repo or workspace.</small>
+          </button>
+          <button className={`onboarding-mode${mode === "new" ? " onboarding-mode--active" : ""}`} type="button" onClick={() => setMode("new")}>
+            <span>Start project</span>
+            <small>Prepare a fresh workspace with an agent.</small>
+          </button>
+        </div>
         <ul className="onboarding-steps">
-          <li className={setup.ticketsDirExists ? "onboarding-step onboarding-step--done" : "onboarding-step"}><span className="onboarding-dot" /><span className="onboarding-step-label">Tickets directory</span><span className="onboarding-step-detail">{setup.ticketsDir || "not configured"}</span></li>
-          <li className={setup.indexExists ? "onboarding-step onboarding-step--done" : "onboarding-step"}><span className="onboarding-dot" /><span className="onboarding-step-label">Ticket index</span><span className="onboarding-step-detail">{setup.indexExists ? "_index.json exists" : "will be created"}</span></li>
-          <li className={(setup.repos || []).length > 0 ? "onboarding-step onboarding-step--done" : "onboarding-step"}><span className="onboarding-dot" /><span className="onboarding-step-label">Configured repo</span><span className="onboarding-step-detail">{(setup.repos || []).join(", ") || "none"}</span></li>
+          {step(1, "Project", setup?.activeProject || "choose a folder")}
+          {step(2, "Local setup", restart ? "restart required" : foldersReady && reposReachable ? "ready" : "needs setup")}
+          {step(3, "First ticket", ticketCount ? `${ticketCount} ticket${ticketCount === 1 ? "" : "s"}` : "not created")}
+          {step(4, "Workspace", complete ? "ready to enter" : "locked")}
         </ul>
-        <div className="onboarding-ticket-row"><input className="projects-input" id="onboarding-title" defaultValue="First HelmMate ticket" /><button className="projects-btn" type="button" onClick={createTicket}>Create ticket</button></div>
-        <div className="onboarding-actions"><button className="projects-btn projects-btn--primary" type="button" onClick={initialize}>Initialize folders</button><button className="projects-btn" type="button" onClick={() => { dismiss(); setView("projects"); }}>Open Projects</button><button className="projects-btn" type="button" onClick={dismiss}>Skip</button></div>
       </section>
-    </div>
+
+      <section className="onboarding-panel" aria-label="Project setup">
+        <div className="onboarding-panel-head">
+          <div>
+            <span className="onboarding-panel-kicker">{complete ? "Ready" : mode === "existing" ? "Connect existing folder" : "Start new project"}</span>
+            <h2>{complete ? "Your workspace is ready." : "Complete setup before opening the board."}</h2>
+          </div>
+          <span className={`onboarding-live${complete ? " onboarding-live--ok" : ""}`}>{complete ? "Complete" : "In setup"}</span>
+        </div>
+
+        <div className="onboarding-form-grid">
+          <label className="projects-field">
+            <span className="projects-label">Project name</span>
+            <input className="projects-input" value={projectName} onChange={(e) => updateName(e.target.value)} />
+          </label>
+          <label className="projects-field">
+            <span className="projects-label">Project ID</span>
+            <input className="projects-input" value={projectId} onChange={(e) => setProjectId(slugProjectId(e.target.value))} />
+          </label>
+          <label className="projects-field onboarding-field-wide">
+            <span className="projects-label">Workspace folder</span>
+            <input className="projects-input" value={workspaceDir} onChange={(e) => setWorkspaceDir(e.target.value)} placeholder="/path/to/project" />
+          </label>
+          <label className="projects-field">
+            <span className="projects-label">Ticket prefix</span>
+            <input className="projects-input" value={ticketPrefix} onChange={(e) => setTicketPrefix(e.target.value.toUpperCase())} />
+          </label>
+          <label className="projects-field">
+            <span className="projects-label">Preferred agent</span>
+            <select className="projects-input" value={preferredEngine} onChange={(e) => setPreferredEngine(e.target.value)}>
+              <option value="unknown">Not sure yet</option>
+              <option value="claude">Claude Code</option>
+              <option value="codex">Codex</option>
+            </select>
+          </label>
+        </div>
+
+        <div className="onboarding-action-row">
+          <button className="projects-btn projects-btn--primary" type="button" onClick={saveProject} disabled={saving}>{saving ? "Saving..." : "Save project"}</button>
+          <button className="projects-btn" type="button" onClick={() => generateSetupPrompt(false)}>Generate agent prompt</button>
+          <button className="projects-btn" type="button" onClick={copySetupPrompt}>{setupPrompt ? "Copy prompt" : "Generate & copy"}</button>
+        </div>
+
+        {setupPrompt ? (
+          <label className="onboarding-prompt">
+            <span className="projects-label">Setup prompt fallback</span>
+            <textarea className="projects-textarea projects-prompt" rows={9} readOnly value={setupPrompt} />
+          </label>
+        ) : null}
+
+        <div className="onboarding-readiness">
+          <div className="onboarding-readiness-head">
+            <span>Readiness</span>
+            <button className="projects-link-btn" type="button" onClick={refreshBoard}>Refresh</button>
+          </div>
+          <ul className="projects-steps">
+            <li className={setup?.configPath ? "projects-step projects-step--done" : "projects-step"}><span className="projects-step-dot" /><span className="projects-step-main">Project config</span><span className="projects-step-detail">{setup?.configPath || "not loaded"}</span></li>
+            <li className={!restart ? "projects-step projects-step--done" : "projects-step projects-step--warn"}><span className="projects-step-dot" /><span className="projects-step-main">Runtime project</span><span className="projects-step-detail">{restart ? setup?.restartReason || "restart server to load the selected path" : setup?.runtimeActiveProject || setup?.activeProject || "loaded"}</span></li>
+            <li className={foldersReady ? "projects-step projects-step--done" : "projects-step"}><span className="projects-step-dot" /><span className="projects-step-main">Folders and index</span><span className="projects-step-detail">{foldersReady ? "created" : setup?.ticketsDir || "not configured"}</span></li>
+            <li className={hasRepos && reposReachable ? "projects-step projects-step--done" : "projects-step"}><span className="projects-step-dot" /><span className="projects-step-main">Repo mapping</span><span className="projects-step-detail">{detail}</span></li>
+            <li className={ticketCount > 0 ? "projects-step projects-step--done" : "projects-step"}><span className="projects-step-dot" /><span className="projects-step-main">Starter ticket</span><span className="projects-step-detail">{ticketCount ? `${ticketCount} ticket${ticketCount === 1 ? "" : "s"}` : "needed before board opens"}</span></li>
+          </ul>
+        </div>
+
+        <div className="onboarding-ticket-row">
+          <input className="projects-input" value={starterTitle} onChange={(e) => setStarterTitle(e.target.value)} aria-label="Starter ticket title" />
+          <button className="projects-btn projects-btn--primary" type="button" onClick={initializeFolders}>Initialize folders</button>
+          <button className="projects-btn" type="button" onClick={createStarterTicket}>Create starter ticket</button>
+        </div>
+
+        <div className="onboarding-action-row onboarding-action-row--final">
+          <button className="projects-btn" type="button" onClick={() => generateDoctorPrompt(false)}>Generate Doctor prompt</button>
+          <button className="projects-btn" type="button" onClick={() => doctorPrompt ? writeClipboard(doctorPrompt, "Doctor prompt copied.") : generateDoctorPrompt(true)}>{doctorPrompt ? "Copy Doctor" : "Generate & copy Doctor"}</button>
+          <button className="projects-btn projects-btn--primary onboarding-enter" type="button" onClick={enterWorkspace} disabled={!complete}>Enter workspace</button>
+        </div>
+        {doctorPrompt ? (
+          <label className="onboarding-prompt">
+            <span className="projects-label">Doctor prompt fallback</span>
+            <textarea className="projects-textarea projects-prompt projects-doctor-prompt" rows={7} readOnly value={doctorPrompt} />
+          </label>
+        ) : null}
+        <p className="onboarding-status" role="status">{status}</p>
+      </section>
+    </main>
   );
 }
 

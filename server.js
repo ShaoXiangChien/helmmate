@@ -14,6 +14,15 @@ import {
   TICKETS_DIR,
   TICKETS_INDEX,
   LOGS_DIR,
+  RUNS_FILE,
+  SCRIPTS_PROMPT,
+  FIX_CI_PROMPT,
+  FIX_CONFLICT_PROMPT,
+  WORK_PROMPT_REF,
+  FIX_CI_PROMPT_REF,
+  FIX_CONFLICT_PROMPT_REF,
+  ROLE_BY_REPO,
+  AGENT_MODEL,
 } from "./lib/paths.js";
 import {
   addRunning,
@@ -25,10 +34,10 @@ import {
   getBreaker,
   clearBreaker,
 } from "./lib/state.js";
-import { ENGINES } from "./lib/engine.js";
+import { CODEX_COMMAND, ENGINES } from "./lib/engine.js";
 import { CODEX_EFFORT_BY_ROLE, CODEX_EFFORTS, CODEX_MODEL_BY_ROLE, CODEX_MODELS } from "./lib/roles.js";
 import { getRuns, reconcileRuns, usageByRoleAndModel } from "./lib/runs.js";
-import { listAgents, writeAgent, isValidRole } from "./lib/agents-config.js";
+import { listConfiguredAgents, writeAgent, isValidRole } from "./lib/agents-config.js";
 import { listQueue, resolveQueueItem } from "./lib/memory-queue.js";
 import {
   readAllTickets,
@@ -39,7 +48,7 @@ import {
   buildNewTicket,
 } from "./lib/tickets.js";
 import { deleteProject, listProjects, saveProject, setActiveProject } from "./lib/project-config.js";
-import { doctorAgentCommands, setupAgentCommands } from "./lib/setup-agent.js";
+import { doctorAgentCommands, importNotesAgentCommands, setupAgentCommands } from "./lib/setup-agent.js";
 import { drainQueuedTickets, launchTicket, stopTicket } from "./lib/launcher.js";
 import { buildLaunchPreview } from "./lib/launch-preview.js";
 import { manualFix } from "./lib/ci-watch.js";
@@ -99,6 +108,107 @@ function setupStatusSnapshot() {
   };
 }
 
+function existsStatus(file) {
+  return {
+    path: file,
+    exists: fs.existsSync(file),
+  };
+}
+
+function roleMeaning(role) {
+  if (role === "cross-repo") {
+    return "Generalist role used when a ticket spans repos, has no repo-specific role, or needs coordination across the workspace.";
+  }
+  if (role === "architect") {
+    return "Planning and design-review role for higher-level architecture work; defaults to the strongest/most expensive model tier.";
+  }
+  return "Repo-specific implementation role used when a mapped repo owns the ticket.";
+}
+
+function agentsSetupSnapshot() {
+  const agents = listConfiguredAgents(CONFIG.roles).map((agent) => {
+    const configuredModel = agent.configuredModel || (CONFIG.roles[agent.role] && CONFIG.roles[agent.role].model) || "";
+    const claudeModel = agent.model || configuredModel || AGENT_MODEL;
+    const body = agent.body || "";
+    return {
+      ...agent,
+      meaning: roleMeaning(agent.role),
+      persona: {
+        path: agent.path,
+        exists: !!agent.exists,
+        description: agent.description || "",
+        model: agent.model || "",
+        preview: body.trim().slice(0, 1200),
+        previewTruncated: body.trim().length > 1200,
+      },
+      claude: {
+        model: claudeModel,
+        source: agent.model ? "persona frontmatter" : configuredModel ? "role config fallback" : "global agentModel fallback",
+      },
+      codex: {
+        model: CODEX_MODEL_BY_ROLE[agent.role] || "gpt-5.4-mini",
+        effort: CODEX_EFFORT_BY_ROLE[agent.role] || "medium",
+        source: "role default",
+      },
+    };
+  });
+  const roles = new Set(agents.map((agent) => agent.role));
+  for (const role of Object.values(ROLE_BY_REPO || {})) {
+    if (role) roles.add(role);
+  }
+  if (!roles.has("cross-repo")) roles.add("cross-repo");
+
+  const repoMappings = Object.entries(CONFIG.repos).map(([key, repo]) => ({
+    key,
+    path: repo.path,
+    exists: fs.existsSync(repo.path),
+    role: ROLE_BY_REPO[key] || repo.role || "cross-repo",
+    source: repo.role ? "repo config" : ROLE_BY_REPO[key] ? "roleByRepo" : "fallback",
+    baseBranch: repo.baseBranch,
+    worktree: !!repo.worktree,
+  }));
+
+  return {
+    readOnly: true,
+    engine: {
+      default: publicState().defaultEngine,
+      configuredDefault: CONFIG.engines.default,
+      allowed: CONFIG.engines.allowed,
+      explanation:
+        "A ticket-level engine override wins. Otherwise HelmMate uses the board-wide default engine shown here; the configured default is only the startup fallback.",
+      commands: {
+        claude: "claude",
+        codex: CODEX_COMMAND,
+      },
+    },
+    roles: agents,
+    roleRouting: {
+      explanation:
+        "A ticket.role override wins. Otherwise HelmMate maps the ticket repo to a role; unmapped tickets fall back to cross-repo.",
+      repoMappings,
+    },
+    prompts: [
+      { key: "work", label: "Work prompt", ref: WORK_PROMPT_REF, ...existsStatus(SCRIPTS_PROMPT) },
+      { key: "ci", label: "CI fix prompt", ref: FIX_CI_PROMPT_REF, ...existsStatus(FIX_CI_PROMPT) },
+      { key: "conflict", label: "Conflict fix prompt", ref: FIX_CONFLICT_PROMPT_REF, ...existsStatus(FIX_CONFLICT_PROMPT) },
+    ],
+    permissions: {
+      level: "warning",
+      text:
+        "Launches run with bypassed CLI permission/sandbox flags. Review the engine, role, prompt file, repo mapping, and worktree mode before arming or launching.",
+      claude: "--dangerously-skip-permissions",
+      codex: "--dangerously-bypass-approvals-and-sandbox",
+    },
+    locations: {
+      logsDir: LOGS_DIR,
+      ticketLogPattern: `${LOGS_DIR}/<ticket-id>.log`,
+      runsLedger: RUNS_FILE,
+      memoryQueueDir: MEMORY_QUEUE_DIR,
+      memoryProposalPattern: `${MEMORY_QUEUE_DIR}/<proposal>.md`,
+    },
+  };
+}
+
 // GET /api/config -> public, non-secret runtime config for the UI.
 app.get("/api/config", (_req, res) => {
   res.json({
@@ -144,6 +254,35 @@ app.post("/api/setup/agent-prompt", (req, res) => {
 // for a coding agent. Mirrors setup handoff: the browser only copies text.
 app.post("/api/setup/doctor-prompt", (_req, res) => {
   res.json(doctorAgentCommands({ setup: setupStatusSnapshot(), state: publicState() }));
+});
+
+// POST /api/import/notes-prompt -> generate a prompt that hands pasted notes to
+// helm-create-ticket. The browser only copies text; the user's coding agent
+// does the actual ticket creation and validation.
+app.post("/api/import/notes-prompt", (req, res) => {
+  const b = req.body && typeof req.body === "object" ? req.body : {};
+  const notes = typeof b.notes === "string" ? b.notes.trim() : "";
+  if (!notes) return res.status(400).json({ error: "notes are required" });
+  const rawRefs = Array.isArray(b.contextRefs)
+    ? b.contextRefs
+    : typeof b.contextRefs === "string"
+    ? b.contextRefs.split(/\r?\n/)
+    : [];
+  const contextRefs = rawRefs.map((item) => String(item || "").trim()).filter(Boolean);
+  res.json(
+    importNotesAgentCommands({
+      notes,
+      contextRefs,
+      createImmediately: b.createImmediately !== false,
+      activeProject: CONFIG.activeProject,
+      workspaceDir: CONFIG.workspaceDir,
+      ticketsDir: CONFIG.ticketsDir,
+      ticketIdPrefix: CONFIG.ticketIdPrefix,
+      repos: REPO_KEYS,
+      statuses: CONFIG.statuses,
+      defaultRepo: REPO_KEYS[0] || "workspace",
+    })
+  );
 });
 
 // GET /api/projects -> project registry from devboard.config.json.
@@ -419,7 +558,8 @@ app.get("/api/runs", (_req, res) => {
 // aggregated by role and by model from the run ledger. Powers the Agents tab.
 app.get("/api/agents", (_req, res) => {
   res.json({
-    agents: listAgents(),
+    setup: agentsSetupSnapshot(),
+    agents: listConfiguredAgents(CONFIG.roles),
     usage: usageByRoleAndModel(),
     codex: {
       modelByRole: CODEX_MODEL_BY_ROLE,
