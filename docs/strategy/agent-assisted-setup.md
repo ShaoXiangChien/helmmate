@@ -83,14 +83,17 @@ The UI should generate prompts that say:
 
 ## UI Direction
 
-Projects should have three first-class actions:
+Projects should make the setup handoff the first-class flow:
 
-- Import existing repo
-- Save new project defaults
-- Copy setup prompt
+- collect project ID, project name, workspace path, ticket prefix, and preferred
+  engine;
+- generate a side-effect-free setup prompt through `POST /api/setup/agent-prompt`;
+- show the prompt in the UI so the user can review it;
+- copy the prompt into Claude Code, Codex, or another local coding agent;
+- refresh setup status through `GET /api/setup/status` after the agent returns.
 
 The advanced config editor remains available, but it should be collapsed by
-default.
+default and should not be treated as the guided setup path.
 
 The near-term UI should not try to fully inspect and configure arbitrary repos
 by itself. Instead, it should collect a few intent fields and generate a strong
@@ -111,8 +114,11 @@ The prompt should route the agent through `helm-setup-project`, with fallbacks:
 3. otherwise read `skills/helm-setup-project/SKILL.md` from the HelmMate repo.
 
 That skill, not the UI, should inspect git state, package manager, prompt files,
-folders, and config preservation requirements. After the user runs the agent,
-the UI can refresh setup status and point to Doctor/readiness checks.
+folders, and config preservation requirements. V1 does not include
+`POST /api/setup/apply-project`; setup writes should happen through the user's
+coding agent and `helm-setup-project`. After the user runs the agent, the UI can
+refresh setup status, explain whether a restart is needed, and point to
+`helm-doctor` for the readiness check.
 
 ## Future One-Click Agent Run
 

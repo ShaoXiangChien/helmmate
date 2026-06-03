@@ -18,7 +18,9 @@ const state = {
   byId: new Map(),
   board: { armed: false, wipLimit: 2, running: [], defaultEngine: "claude" },
   openTicketId: null,
+  panelMode: "view",
   logTimer: null,
+  launchPreviewById: new Map(),
   readyOnly: false,
   config: null,
 };
@@ -125,8 +127,89 @@ async function patchTicket(id, patch) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(patch),
   });
-  if (!res.ok) throw new Error(`PATCH failed (${res.status})`);
-  return res.json();
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const err = new Error(data.error || `PATCH failed (${res.status})`);
+    err.fieldErrors = data.fieldErrors || {};
+    err.issues = data.issues || [];
+    throw err;
+  }
+  return data;
+}
+
+async function fetchLaunchPreview(id) {
+  const res = await fetch(`/api/tickets/${encodeURIComponent(id)}/launch-preview`);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `preview failed (${res.status})`);
+  return data;
+}
+
+async function postTicket(payload) {
+  const res = await fetch("/api/tickets", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const err = new Error(data.error || `Create failed (${res.status})`);
+    err.fieldErrors = data.fieldErrors || {};
+    err.issues = data.issues || [];
+    throw err;
+  }
+  return data;
+}
+
+function splitLines(value) {
+  return String(value || "")
+    .split(/\r?\n/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function joinLines(items) {
+  return Array.isArray(items) ? items.filter(Boolean).join("\n") : "";
+}
+
+function optionHtml(value, label, current) {
+  return `<option value="${escapeHtml(value)}"${value === current ? " selected" : ""}>${escapeHtml(label)}</option>`;
+}
+
+function priorityOptions(current) {
+  return ["P0", "P1", "P2"].map((item) => optionHtml(item, item, current || "P2")).join("");
+}
+
+function statusOptions(current, mode = "edit") {
+  const options =
+    mode === "create" ? COLUMNS.filter((item) => ["triage", "backlog"].includes(item.status)) : COLUMNS;
+  return options.map((item) => optionHtml(item.status, item.title, current || "triage")).join("");
+}
+
+function repoOptions(current) {
+  const repos = Array.from(VALID_REPOS);
+  const selected = current || repos[0] || "workspace";
+  return repos.map((item) => optionHtml(item, item, selected)).join("");
+}
+
+function fieldErrorHtml(errors, field) {
+  return errors && errors[field] ? `<p class="field-error">${escapeHtml(errors[field])}</p>` : "";
+}
+
+function formatReviewerNote(note) {
+  return `${new Date().toISOString()} — reviewer: ${String(note || "").trim()}`;
+}
+
+function validateTicketDraft(draft) {
+  const errors = {};
+  if (!draft.title) errors.title = "Title is required.";
+  if (!draft.description) errors.description = "Description is required.";
+  if (!VALID_REPOS.has(draft.repo)) errors.repo = "Choose a configured repo.";
+  if (!["P0", "P1", "P2"].includes(draft.priority)) errors.priority = "Choose a valid priority.";
+  if (!COLUMNS.some((item) => item.status === draft.status)) errors.status = "Choose a valid status.";
+  if (draft.status !== "triage" && draft.acceptance_criteria.length === 0) {
+    errors.acceptance_criteria = "Acceptance criteria are required before a ticket leaves triage.";
+  }
+  return errors;
 }
 
 function isSessionRunning(id) {
@@ -338,31 +421,134 @@ function engineTag(t) {
   return `<span class="tag tag-engine tag-engine--${engine}" title="${escapeHtml(title)}">${escapeHtml(engine)}</span>`;
 }
 
+function previewLine(label, value) {
+  return `<div class="kv launch-preview-kv"><span class="kv-key">${escapeHtml(label)}</span><span class="kv-val">${escapeHtml(value || "—")}</span></div>`;
+}
+
+function previewIssues(items, emptyText) {
+  if (!Array.isArray(items) || !items.length) return `<p class="panel-desc">${escapeHtml(emptyText)}</p>`;
+  return `<ul class="launch-preview-issues">
+    ${items
+      .map((item) => {
+        const level = item && item.level ? item.level : "warning";
+        return `<li class="launch-preview-issue launch-preview-issue--${escapeHtml(level)}">${escapeHtml(item.message || item.code || "issue")}</li>`;
+      })
+      .join("")}
+  </ul>`;
+}
+
+function launchPreviewText(p) {
+  if (!p) return "";
+  const effort = p.effort ? `${p.effort.name} (${p.effort.source})` : "n/a";
+  const worktree = p.worktree || {};
+  const prompt = p.promptFile || {};
+  const role = p.role || {};
+  const command = p.command || {};
+  const blockers = Array.isArray(p.blockers) && p.blockers.length
+    ? p.blockers.map((item) => `- ${item.message || item.code}`).join("\n")
+    : "- none";
+  const warnings = Array.isArray(p.warnings) && p.warnings.length
+    ? p.warnings.map((item) => `- ${item.message || item.code}`).join("\n")
+    : "- none";
+
+  return [
+    `Launch preview for ${p.ticketId}`,
+    `generated: ${p.generatedAt}`,
+    `read only: ${p.readOnly ? "yes" : "no"}`,
+    `will spawn agent: ${p.willSpawnAgent ? "yes" : "no"}`,
+    `engine: ${p.engine?.name || "unknown"} (${p.engine?.source || "unknown"})`,
+    `model: ${p.model?.name || "unknown"} (${p.model?.source || "unknown"})`,
+    `effort: ${effort}`,
+    `role: ${role.name || "unknown"} (${role.mode || "unknown"})`,
+    `persona: ${role.personaPath || "unknown"} (${role.personaExists ? "exists" : "missing"})`,
+    `command: ${command.summary || "unknown"}`,
+    `cwd: ${p.cwd || "unknown"}`,
+    `branch: ${p.branch || "unknown"}`,
+    `worktree: ${worktree.mode || "unknown"} at ${worktree.path || "unknown"}`,
+    `prompt file: ${prompt.ref || "unknown"} -> ${prompt.path || "unknown"} (${prompt.exists ? "exists" : "missing"})`,
+    `expected handoff status: ${p.expectedHandoffStatus || "unknown"}`,
+    "blockers:",
+    blockers,
+    "warnings:",
+    warnings,
+  ].join("\n");
+}
+
+function renderLaunchPreview(preview) {
+  const mount = $("#launch-preview-content");
+  if (!mount) return;
+  if (!preview) {
+    mount.innerHTML = `<p class="panel-desc">Preview not loaded.</p>`;
+    return;
+  }
+
+  const worktree = preview.worktree || {};
+  const prompt = preview.promptFile || {};
+  const role = preview.role || {};
+  const command = preview.command || {};
+  const effort = preview.effort ? `${preview.effort.name} (${preview.effort.source})` : "n/a";
+
+  mount.innerHTML = `
+    ${previewLine("engine", `${preview.engine?.name || "unknown"} (${preview.engine?.source || "unknown"})`)}
+    ${previewLine("model", `${preview.model?.name || "unknown"} (${preview.model?.source || "unknown"})`)}
+    ${previewLine("effort", effort)}
+    ${previewLine("role", `${role.name || "unknown"} (${role.mode || "unknown"})`)}
+    ${previewLine("persona", `${role.personaPath || "unknown"} (${role.personaExists ? "exists" : "missing"})`)}
+    ${previewLine("cwd", preview.cwd)}
+    ${previewLine("branch", preview.branch)}
+    ${previewLine("worktree", `${worktree.mode || "unknown"} · ${worktree.path || "unknown"}`)}
+    ${previewLine("prompt file", `${prompt.ref || "unknown"} (${prompt.exists ? "exists" : "missing"})`)}
+    ${previewLine("handoff", preview.expectedHandoffStatus)}
+    <div class="launch-preview-command">${escapeHtml(command.summary || "command unavailable")}</div>
+    <div class="launch-preview-grid">
+      <div>
+        <h4>Blockers</h4>
+        ${previewIssues(preview.blockers, "None")}
+      </div>
+      <div>
+        <h4>Warnings</h4>
+        ${previewIssues(preview.warnings, "None")}
+      </div>
+    </div>
+  `;
+}
+
+async function loadLaunchPreview(id) {
+  const mount = $("#launch-preview-content");
+  const copy = $("#launch-preview-copy");
+  if (mount) mount.innerHTML = `<p class="panel-desc">Loading preview...</p>`;
+  if (copy) copy.disabled = true;
+  try {
+    const preview = await fetchLaunchPreview(id);
+    state.launchPreviewById.set(id, preview);
+    if (state.openTicketId !== id) return;
+    renderLaunchPreview(preview);
+    if (copy) copy.disabled = false;
+  } catch (err) {
+    if (mount) mount.innerHTML = `<p class="field-error">${escapeHtml(err.message)}</p>`;
+  }
+}
+
+async function copyLaunchPreview(id) {
+  const preview = state.launchPreviewById.get(id);
+  if (!preview) {
+    toast("Preview is not loaded yet");
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(launchPreviewText(preview));
+    toast("Launch preview copied");
+  } catch (err) {
+    toast(`Could not copy preview: ${err.message}`);
+  }
+}
+
 function firstRepo() {
   return Array.from(VALID_REPOS)[0] || "workspace";
 }
 
 async function createBoardStarterTicket() {
-  try {
-    const res = await fetch("/api/tickets", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        title: "First HelmMate ticket",
-        repo: firstRepo(),
-        priority: "P2",
-        status: "triage",
-        description: "Created from the Board empty state.",
-        acceptance_criteria: ["Ticket appears on the board"],
-      }),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || `Create failed (${res.status})`);
-    toast(`${data.ticket?.id || "Ticket"} created`);
-    await refresh();
-  } catch (err) {
-    toast(err.message);
-  }
+  openCreateTicketPanel();
 }
 
 async function copyBoardSetupPrompt() {
@@ -376,6 +562,7 @@ async function copyBoardSetupPrompt() {
         name: state.config?.activeProject || "Default",
         workspaceDir: state.config?.workspaceDir || ".",
         ticketIdPrefix: state.config?.ticketIdPrefix || "DB",
+        preferredEngine: state.config?.defaultEngine || "unknown",
       }),
     });
     const data = await res.json().catch(() => ({}));
@@ -635,10 +822,215 @@ function codexEffortOptions(t) {
   ].join("");
 }
 
+function defaultTicketDraft() {
+  return {
+    title: "",
+    status: "triage",
+    priority: "P2",
+    repo: firstRepo(),
+    description: "",
+    acceptance_criteria: [],
+    context_refs: [],
+    notes: [],
+    reviewer_note: "",
+  };
+}
+
+function notesSectionHtml(t) {
+  const notes = Array.isArray(t.notes) ? t.notes : [];
+  if (!notes.length) return "";
+  return `
+    <div class="panel-section">
+      <h3>Reviewer notes</h3>
+      <ul class="note-list">${notes.map((note) => `<li>${escapeHtml(note)}</li>`).join("")}</ul>
+    </div>`;
+}
+
+function ticketFormHtml(t, mode, errors = {}) {
+  const isCreate = mode === "create";
+  const title = isCreate ? "Create ticket" : "Edit ticket";
+  const saveLabel = isCreate ? "Create ticket" : "Save changes";
+  return `
+    <span class="panel-id">${isCreate ? "New ticket" : `${escapeHtml(t.id)} &middot; ${escapeHtml(t.status)}`}</span>
+    <h2>${title}</h2>
+    ${fieldErrorHtml(errors, "form")}
+    <form class="ticket-form" id="ticket-form" novalidate>
+      <div class="panel-section">
+        <label class="panel-label" for="ticket-title">Title</label>
+        <input class="panel-input" id="ticket-title" name="title" type="text" value="${escapeHtml(t.title)}" autocomplete="off" />
+        ${fieldErrorHtml(errors, "title")}
+      </div>
+
+      <div class="ticket-form-grid">
+        <div>
+          <label class="panel-label" for="ticket-priority">Priority</label>
+          <select class="panel-move" id="ticket-priority" name="priority">${priorityOptions(t.priority)}</select>
+          ${fieldErrorHtml(errors, "priority")}
+        </div>
+        <div>
+          <label class="panel-label" for="ticket-status">Status</label>
+          <select class="panel-move" id="ticket-status" name="status">${statusOptions(t.status, mode)}</select>
+          ${fieldErrorHtml(errors, "status")}
+        </div>
+      </div>
+
+      <div class="panel-section">
+        <label class="panel-label" for="ticket-repo">Repo</label>
+        <select class="panel-move" id="ticket-repo" name="repo">${repoOptions(t.repo)}</select>
+        ${fieldErrorHtml(errors, "repo")}
+      </div>
+
+      <div class="panel-section">
+        <label class="panel-label" for="ticket-description">Description</label>
+        <textarea class="panel-textarea" id="ticket-description" name="description" rows="6">${escapeHtml(t.description)}</textarea>
+        ${fieldErrorHtml(errors, "description")}
+      </div>
+
+      <div class="panel-section">
+        <label class="panel-label" for="ticket-acceptance">Acceptance criteria</label>
+        <textarea class="panel-textarea" id="ticket-acceptance" name="acceptance_criteria" rows="5" placeholder="One criterion per line">${escapeHtml(joinLines(t.acceptance_criteria))}</textarea>
+        ${fieldErrorHtml(errors, "acceptance_criteria")}
+      </div>
+
+      <div class="panel-section">
+        <label class="panel-label" for="ticket-context">Context refs</label>
+        <textarea class="panel-textarea" id="ticket-context" name="context_refs" rows="4" placeholder="One file, URL, or note ref per line">${escapeHtml(joinLines(t.context_refs))}</textarea>
+        ${fieldErrorHtml(errors, "context_refs")}
+      </div>
+
+      <div class="panel-section">
+        <label class="panel-label" for="ticket-reviewer-note">Add reviewer note</label>
+        <textarea class="panel-textarea" id="ticket-reviewer-note" name="reviewer_note" rows="3">${escapeHtml(t.reviewer_note || "")}</textarea>
+        ${fieldErrorHtml(errors, "notes")}
+      </div>
+
+      <div class="panel-form-actions">
+        <button class="primary-btn" id="ticket-save" type="submit">${saveLabel}</button>
+        <button class="ghost-btn" id="ticket-cancel" type="button">Cancel</button>
+      </div>
+    </form>`;
+}
+
+function showPanelHtml(html) {
+  $("#panel-body").innerHTML = html;
+  $("#panel").hidden = false;
+  $("#panel").setAttribute("aria-hidden", "false");
+  $("#panel-overlay").hidden = false;
+}
+
+function openCreateTicketPanel(ticket = defaultTicketDraft(), errors = {}) {
+  state.openTicketId = null;
+  state.panelMode = "create";
+  stopLogPolling();
+  showPanelHtml(ticketFormHtml(ticket, "create", errors));
+  wireTicketForm("create", ticket);
+  const title = $("#ticket-title");
+  if (title) title.focus();
+}
+
+function openEditTicketPanel(id, errors = {}, draft = null) {
+  const ticket = draft || state.byId.get(id);
+  if (!ticket) return;
+  state.openTicketId = id;
+  state.panelMode = "edit";
+  stopLogPolling();
+  showPanelHtml(ticketFormHtml(ticket, "edit", errors));
+  wireTicketForm("edit", ticket);
+  const title = $("#ticket-title");
+  if (title) title.focus();
+}
+
+function readTicketForm(ticket) {
+  const reviewerNote = $("#ticket-reviewer-note")?.value.trim() || "";
+  return {
+    title: $("#ticket-title")?.value.trim() || "",
+    priority: $("#ticket-priority")?.value || "P2",
+    status: $("#ticket-status")?.value || "triage",
+    repo: $("#ticket-repo")?.value || firstRepo(),
+    description: $("#ticket-description")?.value.trim() || "",
+    acceptance_criteria: splitLines($("#ticket-acceptance")?.value || ""),
+    context_refs: splitLines($("#ticket-context")?.value || ""),
+    notes: Array.isArray(ticket.notes) ? [...ticket.notes] : [],
+    reviewer_note: reviewerNote,
+  };
+}
+
+function applyReviewerNote(draft) {
+  if (!draft.reviewer_note) return draft.notes;
+  return [...draft.notes, formatReviewerNote(draft.reviewer_note)];
+}
+
+function validationDraftForRender(ticket, draft) {
+  return { ...ticket, ...draft, notes: draft.notes, reviewer_note: draft.reviewer_note };
+}
+
+function wireTicketForm(mode, ticket) {
+  const form = $("#ticket-form");
+  const cancel = $("#ticket-cancel");
+  if (cancel) {
+    cancel.addEventListener("click", () => {
+      if (mode === "edit") openPanel(ticket.id);
+      else closePanel();
+    });
+  }
+  if (!form) return;
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const draft = readTicketForm(ticket);
+    const errors = validateTicketDraft(draft);
+    const renderDraft = validationDraftForRender(ticket, draft);
+    if (Object.keys(errors).length) {
+      if (mode === "edit") openEditTicketPanel(ticket.id, errors, renderDraft);
+      else openCreateTicketPanel(renderDraft, errors);
+      return;
+    }
+
+    const payload = {
+      title: draft.title,
+      priority: draft.priority,
+      status: draft.status,
+      repo: draft.repo,
+      description: draft.description,
+      acceptance_criteria: draft.acceptance_criteria,
+      context_refs: draft.context_refs,
+    };
+    const notes = applyReviewerNote(draft);
+    if (notes.length) payload.notes = notes;
+
+    try {
+      if (mode === "create") {
+        const result = await postTicket(payload);
+        toast(`${result.ticket.id} created`);
+        await loadTickets();
+        await loadBoardState();
+        renderBoard();
+        openPanel(result.ticket.id);
+      } else {
+        const prevStatus = state.byId.get(ticket.id)?.status;
+        const result = await patchTicket(ticket.id, payload);
+        if (draft.status === "in_progress" && prevStatus !== "in_progress" && launchToast(ticket.id, result)) {
+          /* launchToast handled the message */
+        } else {
+          toast(`${ticket.id} saved`);
+        }
+        await loadTickets();
+        await loadBoardState();
+        renderBoard();
+        openPanel(ticket.id, { keepLog: true });
+      }
+    } catch (err) {
+      const fieldErrors = err.fieldErrors && Object.keys(err.fieldErrors).length ? err.fieldErrors : { form: err.message };
+      if (mode === "edit") openEditTicketPanel(ticket.id, fieldErrors, renderDraft);
+      else openCreateTicketPanel(renderDraft, fieldErrors);
+    }
+  });
+}
+
 function openPanel(id, opts = {}) {
   const t = state.byId.get(id);
   if (!t) return;
   state.openTicketId = id;
+  state.panelMode = "view";
 
   const ac = Array.isArray(t.acceptance_criteria) ? t.acceptance_criteria : [];
   const deps = Array.isArray(t.depends_on) ? t.depends_on : [];
@@ -655,6 +1047,9 @@ function openPanel(id, opts = {}) {
       t.origin ? ` &middot; ↳ from ${escapeHtml(t.origin)}` : ""
     }</span>
     <h2>${escapeHtml(t.title)}</h2>
+    <div class="panel-actions">
+      <button class="primary-btn" id="panel-edit" type="button">Edit</button>
+    </div>
     <div class="card-meta" style="margin-top:8px">
       ${priorityPill(t.priority)}
       ${t.origin ? `<span class="tag tag-origin">↳ ${escapeHtml(t.origin)}</span>` : ""}
@@ -697,6 +1092,19 @@ function openPanel(id, opts = {}) {
       <p class="panel-hint">Used only when this ticket resolves to Codex. Empty means role default, not global config default.</p>
     </div>
 
+    <div class="panel-section launch-preview-section">
+      <div class="panel-section-head">
+        <h3>Launch preview</h3>
+        <div class="panel-section-actions">
+          <button class="ghost-btn launch-preview-btn" id="launch-preview-refresh" type="button">Refresh</button>
+          <button class="ghost-btn launch-preview-btn" id="launch-preview-copy" type="button" disabled>Copy</button>
+        </div>
+      </div>
+      <div class="launch-preview-content" id="launch-preview-content">
+        <p class="panel-desc">Loading preview...</p>
+      </div>
+    </div>
+
     ${
       isSessionRunning(id)
         ? `<div class="panel-section">
@@ -736,6 +1144,8 @@ function openPanel(id, opts = {}) {
            </div>`
         : ""
     }
+
+    ${notesSectionHtml(t)}
 
     ${
       ac.length
@@ -778,12 +1188,21 @@ function openPanel(id, opts = {}) {
   $("#panel").setAttribute("aria-hidden", "false");
   $("#panel-overlay").hidden = false;
 
+  wirePanelEdit(id);
   wirePanelMove(id);
   wirePanelEngine(id);
   wirePanelCodexRouting(id);
+  wireLaunchPreview(id);
   wireStopButton(id);
   wireResumeButton(id);
+  loadLaunchPreview(id);
   startLogPolling(id);
+}
+
+function wirePanelEdit(id) {
+  const btn = $("#panel-edit");
+  if (!btn) return;
+  btn.addEventListener("click", () => openEditTicketPanel(id));
 }
 
 // Per-ticket engine override. Empty value clears it (engine: null → resolves to
@@ -841,6 +1260,13 @@ function wireResumeButton(id) {
   btn.addEventListener("click", () => resumeSession(id));
 }
 
+function wireLaunchPreview(id) {
+  const refreshBtn = $("#launch-preview-refresh");
+  const copyBtn = $("#launch-preview-copy");
+  if (refreshBtn) refreshBtn.addEventListener("click", () => loadLaunchPreview(id));
+  if (copyBtn) copyBtn.addEventListener("click", () => copyLaunchPreview(id));
+}
+
 // Touch-friendly status change. SortableJS drag-and-drop never fires on touch
 // screens, so on a phone this dropdown is the ONLY way to move a ticket.
 // Moving to in_progress fires the same launcher path as a drag (and the same
@@ -879,6 +1305,7 @@ function closePanel() {
   $("#panel").setAttribute("aria-hidden", "true");
   $("#panel-overlay").hidden = true;
   state.openTicketId = null;
+  state.panelMode = "view";
   stopLogPolling();
 }
 
@@ -915,6 +1342,8 @@ function stopLogPolling() {
 // ---------- wiring ----------
 function wireChrome() {
   $("#arm-toggle").addEventListener("click", () => setArmed(!state.board.armed));
+  const createBtn = $("#create-ticket");
+  if (createBtn) createBtn.addEventListener("click", () => openCreateTicketPanel());
   const engineBtn = $("#engine-toggle");
   if (engineBtn) {
     engineBtn.addEventListener("click", () => {

@@ -10,6 +10,7 @@ import {
   PORT,
   PUBLIC_DIR,
   REPO_KEYS,
+  REPOS,
   TICKETS_DIR,
   TICKETS_INDEX,
   LOGS_DIR,
@@ -38,13 +39,18 @@ import {
   buildNewTicket,
 } from "./lib/tickets.js";
 import { deleteProject, listProjects, saveProject, setActiveProject } from "./lib/project-config.js";
-import { setupAgentCommands } from "./lib/setup-agent.js";
+import { doctorAgentCommands, setupAgentCommands } from "./lib/setup-agent.js";
 import { drainQueuedTickets, launchTicket, stopTicket } from "./lib/launcher.js";
+import { buildLaunchPreview } from "./lib/launch-preview.js";
 import { manualFix } from "./lib/ci-watch.js";
 import { getUsage } from "./lib/usage.js";
 import { refreshOfficialUsage } from "./lib/official-usage.js";
 import { getCodexUsage } from "./lib/codex-usage.js";
 import * as scheduler from "./lib/scheduler.js";
+import {
+  validateTicketSemantics,
+  validateTicketShape,
+} from "./lib/validation.js";
 
 loadState();
 for (const run of reconcileRuns()) {
@@ -55,10 +61,49 @@ const app = express();
 app.use(express.json());
 app.use(express.static(PUBLIC_DIR));
 
+function setupStatusSnapshot() {
+  const ticketsDirExists = fs.existsSync(TICKETS_DIR);
+  const indexExists = fs.existsSync(TICKETS_INDEX);
+  const tickets = readAllTickets();
+  const registry = listProjects();
+  const requiresRestart = !!registry.requiresRestartToSwitch;
+  const repoStatus = Object.entries(REPOS).map(([key, repo]) => ({
+    key,
+    path: repo.path,
+    exists: fs.existsSync(repo.path),
+    baseBranch: repo.baseBranch,
+    worktree: !!repo.worktree,
+    role: repo.role || null,
+  }));
+  return {
+    configPath: CONFIG.configPath,
+    activeProject: CONFIG.activeProject,
+    configuredActiveProject: registry.activeProject,
+    runtimeActiveProject: registry.runtimeActiveProject,
+    requiresRestart,
+    restartReason: requiresRestart
+      ? "The active project in devboard.config.json differs from the project loaded when the server started."
+      : "",
+    workspaceDir: CONFIG.workspaceDir,
+    ticketsDir: TICKETS_DIR,
+    ticketsDirExists,
+    indexExists,
+    ticketCount: tickets.length,
+    repos: Object.keys(CONFIG.repos),
+    repoStatus,
+    agentDir: AGENTS_DIR,
+    agentDirExists: fs.existsSync(AGENTS_DIR),
+    memoryQueueDir: MEMORY_QUEUE_DIR,
+    memoryQueueDirExists: fs.existsSync(MEMORY_QUEUE_DIR),
+    ready: ticketsDirExists && indexExists && REPO_KEYS.length > 0,
+  };
+}
+
 // GET /api/config -> public, non-secret runtime config for the UI.
 app.get("/api/config", (_req, res) => {
   res.json({
     ticketIdPrefix: CONFIG.ticketIdPrefix,
+    activeProject: CONFIG.activeProject,
     repos: Object.keys(CONFIG.repos),
     statuses: CONFIG.statuses,
     engines: CONFIG.engines.allowed,
@@ -72,24 +117,7 @@ app.get("/api/config", (_req, res) => {
 
 // GET /api/setup/status -> first-run checklist for onboarding.
 app.get("/api/setup/status", (_req, res) => {
-  const ticketsDirExists = fs.existsSync(TICKETS_DIR);
-  const indexExists = fs.existsSync(TICKETS_INDEX);
-  const tickets = readAllTickets();
-  res.json({
-    configPath: CONFIG.configPath,
-    activeProject: CONFIG.activeProject,
-    workspaceDir: CONFIG.workspaceDir,
-    ticketsDir: TICKETS_DIR,
-    ticketsDirExists,
-    indexExists,
-    ticketCount: tickets.length,
-    repos: Object.keys(CONFIG.repos),
-    agentDir: AGENTS_DIR,
-    agentDirExists: fs.existsSync(AGENTS_DIR),
-    memoryQueueDir: MEMORY_QUEUE_DIR,
-    memoryQueueDirExists: fs.existsSync(MEMORY_QUEUE_DIR),
-    ready: ticketsDirExists && indexExists && REPO_KEYS.length > 0,
-  });
+  res.json(setupStatusSnapshot());
 });
 
 // POST /api/setup/init -> create local scaffold dirs/files for the active project.
@@ -110,6 +138,12 @@ app.post("/api/setup/init", (_req, res) => {
 // into Codex or Claude Code without spawning a privileged process from setup.
 app.post("/api/setup/agent-prompt", (req, res) => {
   res.json(setupAgentCommands(req.body || {}));
+});
+
+// POST /api/setup/doctor-prompt -> generate a read-only Doctor prompt/command
+// for a coding agent. Mirrors setup handoff: the browser only copies text.
+app.post("/api/setup/doctor-prompt", (_req, res) => {
+  res.json(doctorAgentCommands({ setup: setupStatusSnapshot(), state: publicState() }));
 });
 
 // GET /api/projects -> project registry from devboard.config.json.
@@ -143,6 +177,42 @@ app.get("/api/tickets", (_req, res) => {
   res.json(readAllTickets());
 });
 
+function ticketFieldFromIssue(item) {
+  const code = item && item.code;
+  const message = item && item.message ? item.message : "";
+  const direct = {
+    bad_status: "status",
+    bad_repo: "repo",
+    bad_priority: "priority",
+    bad_acceptance_criteria: "acceptance_criteria",
+    bad_context_refs: "context_refs",
+    bad_notes: "notes",
+    bad_depends_on: "depends_on",
+    bad_size: "size",
+    bad_source: "source",
+    missing_dependency: "depends_on",
+  };
+  if (direct[code]) return direct[code];
+  const missing = message.match(/^missing ([A-Za-z0-9_]+)$/);
+  return missing ? missing[1] : "form";
+}
+
+function validationResponse(ticket, allTickets = readAllTickets()) {
+  const allById = new Map(allTickets.map((item) => [item.id, item]));
+  if (ticket && ticket.id) allById.set(ticket.id, ticket);
+  const issues = [
+    ...validateTicketShape(ticket),
+    ...validateTicketSemantics(ticket, allById),
+  ];
+  const errors = issues.filter((item) => item.level === "error");
+  const fieldErrors = {};
+  for (const item of errors) {
+    const field = ticketFieldFromIssue(item);
+    if (!fieldErrors[field]) fieldErrors[field] = item.message;
+  }
+  return { issues, errors, fieldErrors };
+}
+
 // POST /api/tickets -> create a ticket from onboarding / UI.
 app.post("/api/tickets", (req, res) => {
   const b = req.body && typeof req.body === "object" ? req.body : {};
@@ -157,8 +227,18 @@ app.post("/api/tickets", (req, res) => {
     status: b.status,
     description: b.description,
     acceptance_criteria: Array.isArray(b.acceptance_criteria) ? b.acceptance_criteria : [],
+    context_refs: Array.isArray(b.context_refs) ? b.context_refs : [],
   });
   if (readTicket(ticket.id)) return res.status(409).json({ error: "ticket id already exists", id: ticket.id });
+  if (Array.isArray(b.notes)) ticket.notes = b.notes;
+  const validation = validationResponse(ticket);
+  if (validation.errors.length) {
+    return res.status(400).json({
+      error: "validation failed",
+      issues: validation.issues,
+      fieldErrors: validation.fieldErrors,
+    });
+  }
   try {
     writeTicket(ticket);
     rewriteIndex();
@@ -205,6 +285,16 @@ app.patch("/api/tickets/:id", (req, res) => {
   }
   merged.updated = new Date().toISOString().slice(0, 10);
 
+  const allTickets = readAllTickets().map((item) => (item.id === id ? merged : item));
+  const validation = validationResponse(merged, allTickets);
+  if (validation.errors.length) {
+    return res.status(400).json({
+      error: "validation failed",
+      issues: validation.issues,
+      fieldErrors: validation.fieldErrors,
+    });
+  }
+
   try {
     writeTicket(merged);
   } catch (err) {
@@ -218,6 +308,18 @@ app.patch("/api/tickets/:id", (req, res) => {
   }
 
   res.json({ ticket: readTicket(id) || merged, launch });
+});
+
+// GET /api/tickets/:id/launch-preview -> read-only explanation of the launch
+// choices and blockers. This must not dispatch or prepare a worktree.
+app.get("/api/tickets/:id/launch-preview", (req, res) => {
+  const { id } = req.params;
+  if (!isValidId(id)) return res.status(400).json({ error: "invalid id" });
+
+  const ticket = readTicket(id);
+  if (!ticket) return res.status(404).json({ error: "ticket not found" });
+
+  res.json(buildLaunchPreview(ticket));
 });
 
 // GET /api/tickets/:id/log -> tail the ticket log (plain text).

@@ -60,8 +60,79 @@ async function patchTicket(id: string, patch: AnyObj) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(patch),
   });
-  if (!res.ok) throw new Error(`PATCH failed (${res.status})`);
-  return res.json();
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const err: any = new Error(data.error || `PATCH failed (${res.status})`);
+    err.fieldErrors = data.fieldErrors || {};
+    err.issues = data.issues || [];
+    throw err;
+  }
+  return data;
+}
+
+async function postTicket(payload: AnyObj) {
+  const res = await fetch("/api/tickets", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const err: any = new Error(data.error || `Create failed (${res.status})`);
+    err.fieldErrors = data.fieldErrors || {};
+    err.issues = data.issues || [];
+    throw err;
+  }
+  return data;
+}
+
+async function fetchLaunchPreview(id: string) {
+  const res = await fetch(`/api/tickets/${encodeURIComponent(id)}/launch-preview`);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `Preview failed (${res.status})`);
+  return data;
+}
+
+function splitLines(value: string) {
+  return String(value || "")
+    .split(/\r?\n/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function joinLines(items: any) {
+  return Array.isArray(items) ? items.filter(Boolean).join("\n") : "";
+}
+
+function formatReviewerNote(note: string) {
+  return `${new Date().toISOString()} — reviewer: ${String(note || "").trim()}`;
+}
+
+function validateTicketDraft(draft: AnyObj, validRepos: Set<string>, columns: AnyObj[]) {
+  const errors: AnyObj = {};
+  if (!draft.title) errors.title = "Title is required.";
+  if (!draft.description) errors.description = "Description is required.";
+  if (!validRepos.has(draft.repo)) errors.repo = "Choose a configured repo.";
+  if (!["P0", "P1", "P2"].includes(draft.priority)) errors.priority = "Choose a valid priority.";
+  if (!columns.some((item) => item.status === draft.status)) errors.status = "Choose a valid status.";
+  if (draft.status !== "triage" && draft.acceptance_criteria.length === 0) {
+    errors.acceptance_criteria = "Acceptance criteria are required before a ticket leaves triage.";
+  }
+  return errors;
+}
+
+function defaultTicketDraft(validRepos: Set<string>) {
+  return {
+    title: "",
+    status: "triage",
+    priority: "P2",
+    repo: Array.from(validRepos)[0] || "workspace",
+    description: "",
+    acceptance_criteria: [],
+    context_refs: [],
+    notes: [],
+    reviewer_note: "",
+  };
 }
 
 function num(n: any) {
@@ -217,6 +288,7 @@ function App() {
   const [readyOnly, setReadyOnly] = useState(false);
   const [toast, setToastState] = useState("");
   const [openTicketId, setOpenTicketId] = useState<string | null>(null);
+  const [creatingTicket, setCreatingTicket] = useState(false);
   const [onboardingRefreshKey, setOnboardingRefreshKey] = useState(0);
 
   const columns = useMemo(() => {
@@ -326,28 +398,9 @@ function App() {
   }, [byId, handleLaunchResult, loadTickets, loadBoardState, showToast]);
 
   const createBoardStarterTicket = useCallback(async () => {
-    try {
-      const repo = Array.from(validRepos)[0] || "workspace";
-      const res = await fetch("/api/tickets", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          title: "First HelmMate ticket",
-          repo,
-          priority: "P2",
-          status: "triage",
-          description: "Created from the Board empty state.",
-          acceptance_criteria: ["Ticket appears on the board"],
-        }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || `Create failed (${res.status})`);
-      showToast(`${data.ticket?.id || "Ticket"} created`);
-      await refresh();
-    } catch (err: any) {
-      showToast(err.message);
-    }
-  }, [validRepos, refresh, showToast]);
+    setOpenTicketId(null);
+    setCreatingTicket(true);
+  }, []);
 
   const copyBoardSetupPrompt = useCallback(async () => {
     try {
@@ -360,6 +413,7 @@ function App() {
           name: config?.activeProject || "Default",
           workspaceDir: config?.workspaceDir || ".",
           ticketIdPrefix: config?.ticketIdPrefix || "DB",
+          preferredEngine: config?.defaultEngine || "unknown",
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -444,6 +498,7 @@ function App() {
             <div className="topbar-controls">
               <div className="wip">WIP &middot; <span>{(board.running || []).length}</span>/<span>{board.wipLimit || 2}</span></div>
               <button className={`ghost-btn${readyOnly ? " ghost-btn--on" : ""}`} type="button" aria-pressed={readyOnly} title="Show ready tickets only" onClick={() => setReadyOnly((v) => !v)}>Ready</button>
+              <button className="ghost-btn" type="button" title="Create a reviewed ticket from the board" onClick={createBoardStarterTicket}>Create ticket</button>
               <button className={`arm ${board.armed ? "arm--on" : "arm--off"}`} type="button" aria-pressed={!!board.armed} onClick={() => setArmed(!board.armed)}>
                 <span className="arm-dot" />
                 <span className="arm-label">{board.armed ? "Armed" : "Disarmed"}</span>
@@ -487,6 +542,7 @@ function App() {
               <TicketPanel
                 ticket={openTicket}
                 columns={columns}
+                validRepos={validRepos}
                 engines={engines}
                 byId={byId}
                 roleModel={roleModel}
@@ -506,6 +562,25 @@ function App() {
                 showToast={showToast}
                 stopSession={stopSession}
                 resumeSession={resumeSession}
+                handleLaunchResult={handleLaunchResult}
+              />
+            ) : null}
+            {creatingTicket ? (
+              <TicketFormPanel
+                mode="create"
+                ticket={defaultTicketDraft(validRepos)}
+                columns={columns}
+                validRepos={validRepos}
+                close={() => setCreatingTicket(false)}
+                refresh={async () => {
+                  await Promise.all([loadTickets(), loadBoardState()]);
+                }}
+                afterSave={(id: string) => {
+                  setCreatingTicket(false);
+                  setOpenTicketId(id);
+                }}
+                showToast={showToast}
+                handleLaunchResult={handleLaunchResult}
               />
             ) : null}
           </section>
@@ -588,7 +663,7 @@ function BoardEmptyState({ setView, createBoardStarterTicket, copyBoardSetupProm
         <button className="board-empty-btn" type="button" onClick={createBoardStarterTicket}>Create ticket</button>
         <button className="board-empty-btn" type="button" onClick={() => showToast("Import from notes is planned next; use Create ticket for now")}>Import from notes</button>
         <button className="board-empty-btn" type="button" onClick={copyBoardSetupPrompt}>Copy setup prompt</button>
-        <button className="board-empty-btn" type="button" onClick={() => showToast("Doctor is not wired yet; open Projects for setup readiness")}>Run doctor</button>
+        <button className="board-empty-btn" type="button" onClick={() => setView("projects")}>Run doctor</button>
       </div>
     </section>
   );
@@ -714,13 +789,145 @@ function queuedExplanation(ticket: AnyObj) {
   };
 }
 
+function launchPreviewText(p: AnyObj) {
+  if (!p) return "";
+  const effort = p.effort ? `${p.effort.name} (${p.effort.source})` : "n/a";
+  const worktree = p.worktree || {};
+  const prompt = p.promptFile || {};
+  const role = p.role || {};
+  const command = p.command || {};
+  const blockers = Array.isArray(p.blockers) && p.blockers.length
+    ? p.blockers.map((item: AnyObj) => `- ${item.message || item.code}`).join("\n")
+    : "- none";
+  const warnings = Array.isArray(p.warnings) && p.warnings.length
+    ? p.warnings.map((item: AnyObj) => `- ${item.message || item.code}`).join("\n")
+    : "- none";
+
+  return [
+    `Launch preview for ${p.ticketId}`,
+    `generated: ${p.generatedAt}`,
+    `read only: ${p.readOnly ? "yes" : "no"}`,
+    `will spawn agent: ${p.willSpawnAgent ? "yes" : "no"}`,
+    `engine: ${p.engine?.name || "unknown"} (${p.engine?.source || "unknown"})`,
+    `model: ${p.model?.name || "unknown"} (${p.model?.source || "unknown"})`,
+    `effort: ${effort}`,
+    `role: ${role.name || "unknown"} (${role.mode || "unknown"})`,
+    `persona: ${role.personaPath || "unknown"} (${role.personaExists ? "exists" : "missing"})`,
+    `command: ${command.summary || "unknown"}`,
+    `cwd: ${p.cwd || "unknown"}`,
+    `branch: ${p.branch || "unknown"}`,
+    `worktree: ${worktree.mode || "unknown"} at ${worktree.path || "unknown"}`,
+    `prompt file: ${prompt.ref || "unknown"} -> ${prompt.path || "unknown"} (${prompt.exists ? "exists" : "missing"})`,
+    `expected handoff status: ${p.expectedHandoffStatus || "unknown"}`,
+    "blockers:",
+    blockers,
+    "warnings:",
+    warnings,
+  ].join("\n");
+}
+
+function LaunchPreviewSection({ ticketId, showToast }: { ticketId: string; showToast: (msg: string) => void }) {
+  const [preview, setPreview] = useState<AnyObj | null>(null);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError("");
+    try {
+      setPreview(await fetchLaunchPreview(ticketId));
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  }, [ticketId]);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  async function copy() {
+    if (!preview) {
+      showToast("Preview is not loaded yet");
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(launchPreviewText(preview));
+      showToast("Launch preview copied");
+    } catch (err: any) {
+      showToast(`Could not copy preview: ${err.message}`);
+    }
+  }
+
+  const role = preview?.role || {};
+  const worktree = preview?.worktree || {};
+  const prompt = preview?.promptFile || {};
+  const command = preview?.command || {};
+  const effort = preview?.effort ? `${preview.effort.name} (${preview.effort.source})` : "n/a";
+
+  return (
+    <div className="panel-section launch-preview-section">
+      <div className="panel-section-head">
+        <h3>Launch preview</h3>
+        <div className="panel-section-actions">
+          <button className="ghost-btn launch-preview-btn" type="button" onClick={load} disabled={loading}>Refresh</button>
+          <button className="ghost-btn launch-preview-btn" type="button" onClick={copy} disabled={!preview}>Copy</button>
+        </div>
+      </div>
+      <div className="launch-preview-content">
+        {loading && !preview ? <p className="panel-desc">Loading preview...</p> : null}
+        {error ? <p className="field-error">{error}</p> : null}
+        {preview ? (
+          <>
+            <div className="kv launch-preview-kv"><span className="kv-key">engine</span><span className="kv-val">{preview.engine?.name || "unknown"} ({preview.engine?.source || "unknown"})</span></div>
+            <div className="kv launch-preview-kv"><span className="kv-key">model</span><span className="kv-val">{preview.model?.name || "unknown"} ({preview.model?.source || "unknown"})</span></div>
+            <div className="kv launch-preview-kv"><span className="kv-key">effort</span><span className="kv-val">{effort}</span></div>
+            <div className="kv launch-preview-kv"><span className="kv-key">role</span><span className="kv-val">{role.name || "unknown"} ({role.mode || "unknown"})</span></div>
+            <div className="kv launch-preview-kv"><span className="kv-key">persona</span><span className="kv-val">{role.personaPath || "unknown"} ({role.personaExists ? "exists" : "missing"})</span></div>
+            <div className="kv launch-preview-kv"><span className="kv-key">cwd</span><span className="kv-val">{preview.cwd || "-"}</span></div>
+            <div className="kv launch-preview-kv"><span className="kv-key">branch</span><span className="kv-val">{preview.branch || "-"}</span></div>
+            <div className="kv launch-preview-kv"><span className="kv-key">worktree</span><span className="kv-val">{worktree.mode || "unknown"} · {worktree.path || "unknown"}</span></div>
+            <div className="kv launch-preview-kv"><span className="kv-key">prompt file</span><span className="kv-val">{prompt.ref || "unknown"} ({prompt.exists ? "exists" : "missing"})</span></div>
+            <div className="kv launch-preview-kv"><span className="kv-key">handoff</span><span className="kv-val">{preview.expectedHandoffStatus || "unknown"}</span></div>
+            <div className="launch-preview-command">{command.summary || "command unavailable"}</div>
+            <div className="launch-preview-grid">
+              <LaunchPreviewIssues title="Blockers" items={preview.blockers} empty="None" />
+              <LaunchPreviewIssues title="Warnings" items={preview.warnings} empty="None" />
+            </div>
+          </>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function LaunchPreviewIssues({ title, items, empty }: { title: string; items: AnyObj[]; empty: string }) {
+  return (
+    <div>
+      <h4>{title}</h4>
+      {Array.isArray(items) && items.length ? (
+        <ul className="launch-preview-issues">
+          {items.map((item: AnyObj, idx: number) => (
+            <li key={`${item.code || "issue"}-${idx}`} className={`launch-preview-issue launch-preview-issue--${item.level || "warning"}`}>
+              {item.message || item.code || "issue"}
+            </li>
+          ))}
+        </ul>
+      ) : <p className="panel-desc">{empty}</p>}
+    </div>
+  );
+}
+
 function TicketPanel(props: AnyObj) {
   const {
-    ticket, columns, engines, byId, resolveRole, resolveEngine, boardDefaultEngine, codexModel,
+    ticket, columns, validRepos, engines, byId, resolveRole, resolveEngine, boardDefaultEngine, codexModel,
     codexEffort, isSessionRunning, isQueued, isSessionPaused, moveTicket, close, refresh, showToast,
+    handleLaunchResult,
     stopSession, resumeSession,
   } = props;
   const [log, setLog] = useState("loading...");
+  const [editing, setEditing] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -765,6 +972,22 @@ function TicketPanel(props: AnyObj) {
   const queuedInfo = queued ? queuedExplanation(ticket) : null;
   const paused = isSessionPaused(ticket);
 
+  if (editing) {
+    return (
+      <TicketFormPanel
+        mode="edit"
+        ticket={ticket}
+        columns={columns}
+        validRepos={validRepos}
+        close={() => setEditing(false)}
+        refresh={refresh}
+        afterSave={() => setEditing(false)}
+        showToast={showToast}
+        handleLaunchResult={handleLaunchResult}
+      />
+    );
+  }
+
   return (
     <>
       <div className="panel-overlay" onClick={close} />
@@ -773,6 +996,9 @@ function TicketPanel(props: AnyObj) {
         <div className="panel-body">
           <span className="panel-id">{ticket.id} &middot; {ticket.status}{ticket.origin ? ` · ↳ from ${ticket.origin}` : ""}</span>
           <h2>{ticket.title}</h2>
+          <div className="panel-actions">
+            <button className="primary-btn" type="button" onClick={() => setEditing(true)}>Edit</button>
+          </div>
           <div className="card-meta" style={{ marginTop: 8 }}>
             {priorityPill(ticket.priority)}
             {ticket.origin ? <span className="tag tag-origin">↳ {ticket.origin}</span> : null}
@@ -812,6 +1038,8 @@ function TicketPanel(props: AnyObj) {
             <p className="panel-hint">Used only when this ticket resolves to Codex. Empty means role default, not global config default.</p>
           </PanelSection>
 
+          <LaunchPreviewSection ticketId={ticket.id} showToast={showToast} />
+
           {running ? (
             <PanelSection title="Session">
               <button className="stop-btn" type="button" onClick={() => stopSession(ticket.id)}>■ Stop session</button>
@@ -835,6 +1063,7 @@ function TicketPanel(props: AnyObj) {
 
           <PanelSection title="Description"><p className="panel-desc">{ticket.description}</p></PanelSection>
           {ticket.status === "blocked" && latestNote ? <PanelSection title="Latest blocker"><p className="panel-desc">{latestNote}</p></PanelSection> : null}
+          {Array.isArray(ticket.notes) && ticket.notes.length ? <PanelSection title="Reviewer notes"><ul className="note-list">{ticket.notes.map((note: string) => <li key={note}>{note}</li>)}</ul></PanelSection> : null}
           {ac.length ? <PanelSection title="Acceptance criteria"><ul className="ac-list">{ac.map((c: string) => <li key={c}><span className="ac-box" /><span>{c}</span></li>)}</ul></PanelSection> : null}
           <PanelSection title="Depends on">
             {deps.length ? <div className="chip-row">{deps.map((id: string) => {
@@ -849,6 +1078,157 @@ function TicketPanel(props: AnyObj) {
           </PanelSection>
           {refs.length ? <PanelSection title="Context refs"><ul className="ref-list">{refs.map((r: string) => <li key={r}>{r}</li>)}</ul></PanelSection> : null}
           <PanelSection title="Live log"><div className="log-view">{log}</div></PanelSection>
+        </div>
+      </aside>
+    </>
+  );
+}
+
+function FieldError({ errors, field }: { errors: AnyObj; field: string }) {
+  return errors?.[field] ? <p className="field-error">{errors[field]}</p> : null;
+}
+
+function TicketFormPanel({ mode, ticket, columns, validRepos, close, refresh, afterSave, showToast, handleLaunchResult }: AnyObj) {
+  const isCreate = mode === "create";
+  const [draft, setDraft] = useState<AnyObj>(() => ({
+    title: ticket.title || "",
+    priority: ticket.priority || "P2",
+    status: ticket.status || "triage",
+    repo: ticket.repo || Array.from(validRepos)[0] || "workspace",
+    description: ticket.description || "",
+    acceptance_criteria: Array.isArray(ticket.acceptance_criteria) ? ticket.acceptance_criteria : [],
+    context_refs: Array.isArray(ticket.context_refs) ? ticket.context_refs : [],
+    notes: Array.isArray(ticket.notes) ? ticket.notes : [],
+    reviewer_note: "",
+  }));
+  const [criteriaText, setCriteriaText] = useState(() => joinLines(ticket.acceptance_criteria));
+  const [contextText, setContextText] = useState(() => joinLines(ticket.context_refs));
+  const [errors, setErrors] = useState<AnyObj>({});
+  const statusChoices = isCreate ? columns.filter((c: AnyObj) => ["triage", "backlog"].includes(c.status)) : columns;
+
+  function setField(field: string, value: any) {
+    setDraft((cur) => ({ ...cur, [field]: value }));
+  }
+
+  async function save(e: React.FormEvent) {
+    e.preventDefault();
+    const normalized = {
+      ...draft,
+      title: String(draft.title || "").trim(),
+      description: String(draft.description || "").trim(),
+      acceptance_criteria: splitLines(criteriaText),
+      context_refs: splitLines(contextText),
+      reviewer_note: String(draft.reviewer_note || "").trim(),
+    };
+    const nextErrors = validateTicketDraft(normalized, validRepos, columns);
+    if (Object.keys(nextErrors).length) {
+      setErrors(nextErrors);
+      setDraft(normalized);
+      return;
+    }
+
+    const payload: AnyObj = {
+      title: normalized.title,
+      priority: normalized.priority,
+      status: normalized.status,
+      repo: normalized.repo,
+      description: normalized.description,
+      acceptance_criteria: normalized.acceptance_criteria,
+      context_refs: normalized.context_refs,
+    };
+    if (normalized.reviewer_note) payload.notes = [...normalized.notes, formatReviewerNote(normalized.reviewer_note)];
+
+    try {
+      if (isCreate) {
+        const result = await postTicket(payload);
+        showToast(`${result.ticket.id} created`);
+        await refresh();
+        afterSave(result.ticket.id);
+      } else {
+        const result = await patchTicket(ticket.id, payload);
+        if (normalized.status === "in_progress" && ticket.status !== "in_progress" && handleLaunchResult) {
+          handleLaunchResult(ticket.id, normalized.status, result);
+        } else {
+          showToast(`${ticket.id} saved`);
+        }
+        await refresh();
+        afterSave(ticket.id);
+      }
+    } catch (err: any) {
+      setErrors(err.fieldErrors && Object.keys(err.fieldErrors).length ? err.fieldErrors : { form: err.message });
+    }
+  }
+
+  return (
+    <>
+      <div className="panel-overlay" onClick={close} />
+      <aside className="panel" aria-hidden="false">
+        <button className="panel-close" type="button" aria-label="Close" onClick={close}>&times;</button>
+        <div className="panel-body">
+          <span className="panel-id">{isCreate ? "New ticket" : `${ticket.id} · ${ticket.status}`}</span>
+          <h2>{isCreate ? "Create ticket" : "Edit ticket"}</h2>
+          <FieldError errors={errors} field="form" />
+          <form className="ticket-form" onSubmit={save} noValidate>
+            <div className="panel-section">
+              <label className="panel-label" htmlFor="ticket-title">Title</label>
+              <input className="panel-input" id="ticket-title" type="text" value={draft.title} onChange={(e) => setField("title", e.target.value)} autoComplete="off" />
+              <FieldError errors={errors} field="title" />
+            </div>
+
+            <div className="ticket-form-grid">
+              <div>
+                <label className="panel-label" htmlFor="ticket-priority">Priority</label>
+                <select className="panel-move" id="ticket-priority" value={draft.priority} onChange={(e) => setField("priority", e.target.value)}>
+                  {["P0", "P1", "P2"].map((p) => <option key={p} value={p}>{p}</option>)}
+                </select>
+                <FieldError errors={errors} field="priority" />
+              </div>
+              <div>
+                <label className="panel-label" htmlFor="ticket-status">Status</label>
+                <select className="panel-move" id="ticket-status" value={draft.status} onChange={(e) => setField("status", e.target.value)}>
+                  {statusChoices.map((c: AnyObj) => <option key={c.status} value={c.status}>{c.title}</option>)}
+                </select>
+                <FieldError errors={errors} field="status" />
+              </div>
+            </div>
+
+            <div className="panel-section">
+              <label className="panel-label" htmlFor="ticket-repo">Repo</label>
+              <select className="panel-move" id="ticket-repo" value={draft.repo} onChange={(e) => setField("repo", e.target.value)}>
+                {Array.from(validRepos).map((repo: string) => <option key={repo} value={repo}>{repo}</option>)}
+              </select>
+              <FieldError errors={errors} field="repo" />
+            </div>
+
+            <div className="panel-section">
+              <label className="panel-label" htmlFor="ticket-description">Description</label>
+              <textarea className="panel-textarea" id="ticket-description" rows={6} value={draft.description} onChange={(e) => setField("description", e.target.value)} />
+              <FieldError errors={errors} field="description" />
+            </div>
+
+            <div className="panel-section">
+              <label className="panel-label" htmlFor="ticket-acceptance">Acceptance criteria</label>
+              <textarea className="panel-textarea" id="ticket-acceptance" rows={5} placeholder="One criterion per line" value={criteriaText} onChange={(e) => setCriteriaText(e.target.value)} />
+              <FieldError errors={errors} field="acceptance_criteria" />
+            </div>
+
+            <div className="panel-section">
+              <label className="panel-label" htmlFor="ticket-context">Context refs</label>
+              <textarea className="panel-textarea" id="ticket-context" rows={4} placeholder="One file, URL, or note ref per line" value={contextText} onChange={(e) => setContextText(e.target.value)} />
+              <FieldError errors={errors} field="context_refs" />
+            </div>
+
+            <div className="panel-section">
+              <label className="panel-label" htmlFor="ticket-reviewer-note">Add reviewer note</label>
+              <textarea className="panel-textarea" id="ticket-reviewer-note" rows={3} value={draft.reviewer_note} onChange={(e) => setField("reviewer_note", e.target.value)} />
+              <FieldError errors={errors} field="notes" />
+            </div>
+
+            <div className="panel-form-actions">
+              <button className="primary-btn" type="submit">{isCreate ? "Create ticket" : "Save changes"}</button>
+              <button className="ghost-btn" type="button" onClick={close}>Cancel</button>
+            </div>
+          </form>
         </div>
       </aside>
     </>
@@ -1140,14 +1520,20 @@ function AgentEditor({ agent, usageByRole, codexConfig, refresh }: AnyObj) {
 function ProjectsView({ active, refreshBoard, setView }: { active: boolean; refreshBoard: () => Promise<void>; setView: (v: View) => void }) {
   const [data, setData] = useState<AnyObj | null>(null);
   const [setup, setSetup] = useState<AnyObj | null>(null);
+  const [boardState, setBoardState] = useState<AnyObj | null>(null);
   const [selectedId, setSelectedId] = useState("default");
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [status, setStatus] = useState("");
+  const [doctorStatus, setDoctorStatus] = useState("");
+  const [setupPrompt, setSetupPrompt] = useState("");
+  const [setupMode, setSetupMode] = useState("existing");
+  const [doctorPrompt, setDoctorPrompt] = useState("");
 
   const refresh = useCallback(async () => {
-    const [d, s] = await Promise.all([getJSON("/api/projects"), getJSON("/api/setup/status")]);
+    const [d, s, st] = await Promise.all([getJSON("/api/projects"), getJSON("/api/setup/status"), getJSON("/api/state")]);
     setData(d);
     setSetup(s);
+    setBoardState(st);
     setSelectedId((cur) => cur || d?.activeProject || d?.runtimeActiveProject || Object.keys(d?.projects || {})[0] || "default");
   }, []);
 
@@ -1180,43 +1566,79 @@ function ProjectsView({ active, refreshBoard, setView }: { active: boolean; refr
       name: name || fallback,
       workspaceDir: path,
       ticketIdPrefix: ((document.getElementById("projects-quick-prefix") as HTMLInputElement)?.value.trim() || "DB").toUpperCase(),
+      preferredEngine: (document.getElementById("projects-quick-engine") as HTMLSelectElement)?.value || "unknown",
     };
   }
 
-  function quickPayload() {
+  async function generateSetupPrompt(mode = "existing", copy = false) {
     const q = quickValues();
-    return {
-      name: q.name,
-      workspaceDir: q.workspaceDir,
-      ticketsDir: "tickets",
-      ticketIdPrefix: q.ticketIdPrefix,
-      agentDir: ".agents",
-      memoryQueueDir: "memory/sync-queue",
-      workPrompt: "scripts/work-ticket-prompt.md",
-      fixCiPrompt: "scripts/fix-ci-prompt.md",
-      fixConflictPrompt: "scripts/fix-conflict-prompt.md",
-      statuses: ["triage", "backlog", "queued", "in_progress", "blocked", "human_review", "done"],
-      repos: { workspace: { path: ".", baseBranch: "main", worktree: false, role: "cross-repo" } },
-      engines: { default: "claude", allowed: ["claude", "codex"] },
-    };
-  }
-
-  async function saveQuick(kind: string) {
-    const q = quickValues();
-    const res = await fetch(`/api/projects/${encodeURIComponent(q.id)}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(quickPayload()) });
-    if (res.ok) {
-      setData(await res.json());
-      setSelectedId(q.id);
-      setStatus(kind === "new" ? "New project defaults saved." : "Existing repo imported.");
+    if (!q.id) {
+      setStatus("Project id is required.");
+      return;
+    }
+    setSetupMode(mode);
+    try {
+      const res = await fetch("/api/setup/agent-prompt", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mode,
+          projectId: q.id,
+          name: q.name,
+          workspaceDir: q.workspaceDir,
+          ticketIdPrefix: q.ticketIdPrefix,
+          preferredEngine: q.preferredEngine,
+        }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || `Prompt failed (${res.status})`);
+      const prompt = body.prompt || "";
+      setSetupPrompt(prompt);
+      if (copy) {
+        await navigator.clipboard.writeText(prompt);
+        setStatus("Generated and copied setup prompt.");
+      } else {
+        setStatus("Generated setup prompt. Review it, then copy it into your coding agent.");
+      }
+    } catch (err: any) {
+      setStatus(`Could not generate setup prompt: ${err.message}`);
     }
   }
 
   async function copyAgentPrompt() {
-    const q = quickValues();
-    const res = await fetch("/api/setup/agent-prompt", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode: "existing", projectId: q.id, name: q.name, workspaceDir: q.workspaceDir, ticketIdPrefix: q.ticketIdPrefix }) });
-    const body = await res.json();
-    await navigator.clipboard.writeText(body.prompt || "");
+    if (!setupPrompt) {
+      await generateSetupPrompt(setupMode, true);
+      return;
+    }
+    await navigator.clipboard.writeText(setupPrompt);
     setStatus("Copied setup prompt.");
+  }
+
+  async function generateDoctorPrompt(copy = false) {
+    try {
+      const res = await fetch("/api/setup/doctor-prompt", { method: "POST" });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || `Prompt failed (${res.status})`);
+      const prompt = body.prompt || "";
+      setDoctorPrompt(prompt);
+      if (copy) {
+        await navigator.clipboard.writeText(prompt);
+        setDoctorStatus("Generated and copied Doctor prompt.");
+      } else {
+        setDoctorStatus("Generated Doctor prompt. Review it, then copy it into your coding agent.");
+      }
+    } catch (err: any) {
+      setDoctorStatus(`Could not generate Doctor prompt: ${err.message}`);
+    }
+  }
+
+  async function copyDoctorPrompt() {
+    if (!doctorPrompt) {
+      await generateDoctorPrompt(true);
+      return;
+    }
+    await navigator.clipboard.writeText(doctorPrompt);
+    setDoctorStatus("Copied Doctor prompt.");
   }
 
   async function saveSelected() {
@@ -1269,22 +1691,43 @@ function ProjectsView({ active, refreshBoard, setView }: { active: boolean; refr
 
   const repos = selected.repos || { workspace: { path: ".", baseBranch: "main", worktree: false, role: "cross-repo" } };
   const statuses = Array.isArray(selected.statuses) ? selected.statuses.join(", ") : "triage, backlog, queued, in_progress, blocked, human_review, done";
+  const engine = selected.engines?.default || "unknown";
+  const mismatch = !!(setup?.configuredActiveProject && setup?.runtimeActiveProject && setup.configuredActiveProject !== setup.runtimeActiveProject);
+  const repoRows = Array.isArray(setup?.repoStatus) && setup.repoStatus.length
+    ? setup.repoStatus
+    : (setup?.repos || []).map((key: string) => ({ key, exists: null, path: "" }));
+  const repoDetail = repoRows.length
+    ? repoRows.map((repo: AnyObj) => {
+      const state = repo.exists === true ? "ok" : repo.exists === false ? "missing" : "configured";
+      return `${repo.key}: ${state}${repo.path ? ` (${repo.path})` : ""}`;
+    }).join("; ")
+    : "none";
+  const reposOk = repoRows.length > 0 && repoRows.every((repo: AnyObj) => repo.exists !== false);
+  const setupRows = [
+    ["Setup status API", !!setup?.configPath, setup?.configPath ? "loaded from /api/setup/status" : "not loaded"],
+    ["Config path", !!setup?.configPath, setup?.configPath || "unknown"],
+    ["Active project match", !mismatch, mismatch ? `${setup?.configuredActiveProject} selected, ${setup?.runtimeActiveProject} running` : setup?.runtimeActiveProject || setup?.activeProject || "unknown"],
+    ["Server restart", !setup?.requiresRestart, setup?.requiresRestart ? "needed to load the selected active project" : "not needed", setup?.requiresRestart ? "warn" : ""],
+    ["Tickets directory", !!setup?.ticketsDirExists, setup?.ticketsDir || "not configured"],
+    ["Ticket index", !!setup?.indexExists, setup?.indexExists ? "_index.json exists" : "missing or will be created"],
+    ["Configured repos", reposOk, repoDetail],
+    ["Board armed", boardState?.armed === false, boardState?.armed === true ? "armed" : boardState?.armed === false ? "disarmed" : "unknown", boardState?.armed === true ? "warn" : ""],
+    ["Autopilot", boardState?.autopilot === false, boardState?.autopilot === true ? "on" : boardState?.autopilot === false ? "off" : "unknown", boardState?.autopilot === true ? "warn" : ""],
+    ["Suggested check", true, "npm run validate:tickets"],
+  ];
 
   return (
     <main className="projects">
       <div className="projects-view">
         <div className="agents-header"><h2 className="agents-title">Projects</h2><button className="agents-refresh-btn" type="button" onClick={refresh}>Refresh</button></div>
         {data?.requiresRestartToSwitch ? <div className="home-breaker projects-restart"><div className="home-breaker-main"><span className="home-breaker-flag">Restart needed</span><span className="home-breaker-reason">The selected active project differs from the project currently loaded by the server.</span></div></div> : null}
-        <section className="home-card projects-guided-card" key={`guided-${id}`}><div className="home-card-head"><h3>Guided setup</h3><span className="home-card-sub">quick start</span></div><div className="home-card-body">
-          <div className="projects-form-grid projects-quick-grid"><ProjectField label="Project ID" id="projects-quick-id" value={id} /><ProjectField label="Name" id="projects-quick-name" value={selected.name || id} /><ProjectField label="Workspace path" id="projects-quick-path" value={selected.workspaceDir || "."} /><ProjectField label="Ticket prefix" id="projects-quick-prefix" value={selected.ticketIdPrefix || "DB"} /></div>
-          <div className="projects-flow-grid"><div className="projects-flow"><span className="projects-flow-kicker">Existing repo</span><span className="projects-flow-main">Import repo defaults</span><button className="projects-btn projects-btn--primary" onClick={() => saveQuick("existing")}>Import existing repo</button></div><div className="projects-flow"><span className="projects-flow-kicker">New project</span><span className="projects-flow-main">Create clean defaults</span><button className="projects-btn" onClick={() => saveQuick("new")}>Save new project</button></div><div className="projects-flow projects-flow--agent"><span className="projects-flow-kicker">Agent setup</span><span className="projects-flow-main">Use helm-setup-project</span><button className="projects-btn" onClick={copyAgentPrompt}>Copy setup prompt</button></div></div>
-          <p className="projects-note">Advanced config stays below for multi-repo projects, custom prompts, and nonstandard statuses.</p><span className="projects-status">{status}</span>
+        <section className="home-card projects-guided-card" key={`guided-${id}`}><div className="home-card-head"><h3>Setup handoff</h3><span className="home-card-sub">prompt only</span></div><div className="home-card-body">
+          <div className="projects-form-grid projects-quick-grid"><ProjectField label="Project ID" id="projects-quick-id" value={id} /><ProjectField label="Name" id="projects-quick-name" value={selected.name || id} /><ProjectField label="Workspace path" id="projects-quick-path" value={selected.workspaceDir || "."} /><ProjectField label="Ticket prefix" id="projects-quick-prefix" value={selected.ticketIdPrefix || "DB"} /><ProjectEngineField value={engine} /></div>
+          <div className="projects-agent-card"><div><span className="projects-flow-kicker">Use your coding agent</span><p className="projects-agent-copy">Generate a prompt for Claude Code, Codex, or another local agent. The agent runs <code>helm-setup-project</code>, inspects the workspace, previews changes, and keeps HelmMate disarmed.</p></div><div className="projects-actions"><button className="projects-btn projects-btn--primary" type="button" onClick={() => generateSetupPrompt("existing")}>Existing repo prompt</button><button className="projects-btn" type="button" onClick={() => generateSetupPrompt("new")}>New project prompt</button><button className="projects-btn" type="button" onClick={copyAgentPrompt}>{setupPrompt ? "Copy prompt" : "Generate & copy"}</button></div></div>
+          {setupPrompt ? <div className="projects-prompt-wrap"><label className="projects-label" htmlFor="projects-setup-prompt">Generated prompt</label><textarea className="projects-textarea projects-prompt" id="projects-setup-prompt" rows={16} readOnly value={setupPrompt} /></div> : null}
+          <p className="projects-note">This handoff is side-effect free. The setup agent should inspect read-only first, preview intended changes, preserve unrelated project entries, validate tickets, then suggest HelmMate Doctor as the follow-up check.</p><span className="projects-status">{status}</span>
         </div></section>
-        <section className="home-card projects-setup-card"><div className="home-card-head"><h3>Setup assistant</h3><span className="home-card-sub">{setup?.ready ? "ready" : "needs setup"}</span></div><div className="home-card-body"><ul className="projects-steps">{["Tickets directory", "Ticket index", "Configured repo", "Agent directory", "Memory queue"].map((label, idx) => {
-          const ok = idx === 0 ? setup?.ticketsDirExists : idx === 1 ? setup?.indexExists : idx === 2 ? (setup?.repos || []).length > 0 : idx === 3 ? setup?.agentDirExists : setup?.memoryQueueDirExists;
-          const detail = idx === 0 ? setup?.ticketsDir : idx === 1 ? (setup?.indexExists ? "_index.json exists" : "will be created") : idx === 2 ? (setup?.repos || []).join(", ") || "none" : idx === 3 ? setup?.agentDir : setup?.memoryQueueDir;
-          return <li key={label} className={ok ? "projects-step projects-step--done" : "projects-step"}><span className="projects-step-dot" /><span className="projects-step-main">{label}</span><span className="projects-step-detail">{detail || "not configured"}</span></li>;
-        })}</ul><div className="projects-actions"><button className="projects-btn projects-btn--primary" onClick={initializeProject}>Initialize folders</button><input className="projects-input projects-starter-input" id="projects-starter-title" defaultValue="First HelmMate ticket" /><button className="projects-btn" onClick={createStarterTicket}>Create starter ticket</button></div></div></section>
+        <section className="home-card projects-setup-card"><div className="home-card-head"><h3>Readiness Doctor</h3><span className="home-card-sub">{setup?.ready && !setup?.requiresRestart && !mismatch ? "basic checks pass" : "check before arming"}</span></div><div className="home-card-body"><ul className="projects-steps">{setupRows.map(([label, ok, detail, tone]: any[]) => <li key={label} className={`${ok ? "projects-step projects-step--done" : "projects-step"}${tone ? ` projects-step--${tone}` : ""}`}><span className="projects-step-dot" /><span className="projects-step-main">{label}</span><span className="projects-step-detail">{detail || "not configured"}</span></li>)}</ul><p className="projects-note">These are lightweight UI checks. Run Doctor with your coding agent for git auth, CLI, worktree, prompt, persona, PR, and process readiness. {setup?.requiresRestart ? setup?.restartReason || "Restart the server to load updated project paths." : ""}</p><div className="projects-actions"><button className="projects-btn" type="button" onClick={refresh}>Refresh status</button><button className="projects-btn projects-btn--primary" onClick={initializeProject}>Initialize folders</button><button className="projects-btn projects-btn--primary" type="button" onClick={() => generateDoctorPrompt(false)}>Run Doctor prompt</button><button className="projects-btn" type="button" onClick={copyDoctorPrompt}>{doctorPrompt ? "Copy Doctor prompt" : "Generate & copy Doctor"}</button><input className="projects-input projects-starter-input" id="projects-starter-title" defaultValue="First HelmMate ticket" /><button className="projects-btn" onClick={createStarterTicket}>Create starter ticket</button></div>{doctorPrompt ? <div className="projects-prompt-wrap"><label className="projects-label" htmlFor="projects-doctor-prompt">Doctor prompt</label><textarea className="projects-textarea projects-prompt projects-doctor-prompt" id="projects-doctor-prompt" rows={14} readOnly value={doctorPrompt} /></div> : null}<span className="projects-status">{doctorStatus}</span></div></section>
         <div className="projects-grid">
           <section className="home-card projects-list-card"><div className="home-card-head"><h3>Project registry</h3></div><div className="home-card-body"><div className="projects-list">{ids.map((pid) => <button key={pid} className={`projects-list-item${pid === id ? " projects-list-item--selected" : ""}`} type="button" onClick={() => setSelectedId(pid)}><span className="projects-list-name">{data?.projects?.[pid]?.name || pid}</span><span className="projects-list-meta">{pid}{pid === data?.activeProject ? " · selected" : ""}{pid === data?.runtimeActiveProject ? " · running" : ""}</span></button>)}</div></div></section>
           <section className="home-card projects-editor-card" key={`editor-${id}`}><div className="home-card-head"><h3>Advanced config</h3><button className="projects-link-btn" type="button" onClick={() => setAdvancedOpen((v) => !v)}>{advancedOpen ? "Hide" : "Show"}</button></div><div className="home-card-body" hidden={!advancedOpen}>
@@ -1300,6 +1743,20 @@ function ProjectsView({ active, refreshBoard, setView }: { active: boolean; refr
 
 function ProjectField({ label, id, value }: { label: string; id: string; value: string }) {
   return <label className="projects-field"><span className="projects-label">{label}</span><input className="projects-input" id={id} type="text" defaultValue={value} key={`${id}-${value}`} /></label>;
+}
+
+function ProjectEngineField({ value }: { value: string }) {
+  const selected = value || "unknown";
+  return (
+    <label className="projects-field">
+      <span className="projects-label">Preferred engine</span>
+      <select className="projects-input" id="projects-quick-engine" defaultValue={selected} key={`projects-quick-engine-${selected}`}>
+        <option value="unknown">Not sure</option>
+        <option value="claude">Claude Code</option>
+        <option value="codex">Codex</option>
+      </select>
+    </label>
+  );
 }
 
 function Onboarding({ refreshBoard, setView }: { refreshBoard: () => Promise<void>; setView: (v: View) => void }) {

@@ -1,46 +1,42 @@
 # HelmMate
 
+![HelmMate banner](./public/hero-banner.png)
+
 HelmMate is a local cockpit for AI coding work.
 
-It helps engineers and technical PMs turn product asks into agent-ready tickets,
-then steer Codex, Claude Code, and other local coding agents through real repos,
+It turns rough product asks into agent-ready tickets, then helps you steer
+Codex, Claude Code, and other local coding agents through real repositories,
 branches, worktrees, logs, and human review.
 
-It is not trying to run your whole company. It is trying to make your existing
-AI engineering workflow less chaotic.
+HelmMate is not trying to replace your engineering process. It gives the messy
+parts of agent-assisted development a calmer shape:
 
 ```text
-idea -> agent-ready ticket -> local board -> bounded agent run -> PR handoff -> human review
+idea -> ticket -> local board -> bounded agent run -> PR handoff -> review
 ```
 
-## Why HelmMate
+## Why It Exists
 
-AI coding agents are getting good enough to do real work, but the surrounding
-workflow is still messy:
+AI coding agents can do useful engineering work, but the workflow around them is
+still easy to lose track of. Prompts drift, tickets miss context, agents run in
+the wrong branch, logs scatter, and the final review often arrives without the
+trail you need to trust it.
 
-- fuzzy requests become vague prompts;
-- tickets miss context, dependencies, or acceptance criteria;
-- agents run in the wrong repo or branch;
-- logs, cost, and handoff notes scatter across tools;
-- humans still need to review the final work, but the review context is thin.
+HelmMate keeps agent work close to the primitives engineers already use:
+repositories, branches, worktrees, tickets, dependencies, acceptance criteria,
+test commands, pull requests, and review notes.
 
-HelmMate keeps the workflow close to the software delivery primitives technical
-teams already understand: repo, branch, worktree, ticket, dependency,
-acceptance criteria, test command, PR, and review.
+## What HelmMate Does
 
-## What Makes It Different
-
-- **Engineering-native:** HelmMate maps work to repos, branches, worktrees,
-  tickets, and PR handoffs instead of org charts or "AI employees."
-- **Local-first:** JSON tickets, local logs, local subprocesses, and a server
-  bound to `127.0.0.1` by default.
-- **Agent-ready tickets:** tickets carry repo, status, priority, dependencies,
-  context refs, branch naming, acceptance criteria, and notes.
-- **Review-gated execution:** the board starts disarmed, autopilot starts off,
-  WIP limits are enforced, and finished work stops at human review.
-- **Multi-project aware:** keep multiple project configs in one local cockpit,
-  while preserving a lightweight setup for a single repo.
-- **Skill-driven setup:** slash-command friendly skills help agents set up
+- **Creates agent-ready tickets:** tickets include repo, status, priority,
+  dependencies, branch naming, acceptance criteria, context refs, and notes.
+- **Runs locally first:** JSON tickets, local logs, local subprocesses, and a
+  server bound to `127.0.0.1` by default.
+- **Keeps execution review-gated:** the board starts disarmed, autopilot starts
+  off, WIP limits are enforced, and finished work stops at human review.
+- **Supports multiple projects:** keep several project configs in one local
+  cockpit without making the single-repo case heavy.
+- **Works with agent skills:** slash-command friendly skills help agents set up
   projects, create tickets, work tickets, fix PRs, sync memory, and diagnose the
   board.
 
@@ -52,7 +48,7 @@ npm run init
 npm start
 ```
 
-Then open [http://127.0.0.1:4317](http://127.0.0.1:4317).
+Open [http://127.0.0.1:4317](http://127.0.0.1:4317).
 
 The package and CLI still use `dev-board` while the product name settles:
 
@@ -64,8 +60,8 @@ npx dev-board start
 
 ## Agent-Assisted Setup
 
-The easiest setup path is to let a coding agent inspect the repo and write the
-boring config.
+The easiest setup path is to let a coding agent inspect your repo and write the
+routine config.
 
 In Codex, Claude Code, or any agent that supports slash commands:
 
@@ -78,14 +74,14 @@ unrelated project entries, run npm run validate:tickets, and do not arm HelmMate
 If the slash command is unavailable, point the agent at
 `skills/helm-setup-project/SKILL.md` and ask it to follow that workflow.
 
-The Projects tab can also generate one copyable setup prompt from a project ID,
-name, workspace path, and ticket prefix. Use:
+The Projects tab can also generate a copyable setup prompt from a project ID,
+name, workspace path, and ticket prefix.
 
-- **Existing repo** to import conservative defaults for a repository that
-  already exists.
-- **New project** to save a clean HelmMate project entry after the repo scaffold
+- **Existing repo:** import conservative defaults for a repository that already
   exists.
-- **Advanced config** only for multi-repo setups, custom prompts, or nonstandard
+- **New project:** save a clean HelmMate project entry after the repo scaffold
+  exists.
+- **Advanced config:** tune multi-repo setups, custom prompts, or nonstandard
   statuses.
 
 ## Agent Skills
@@ -175,4 +171,4 @@ Status semantics:
 See [OPEN_SOURCE_PLAN.md](./OPEN_SOURCE_PLAN.md) for the extraction plan,
 [IMPROVEMENTS.md](./IMPROVEMENTS.md) for the public roadmap, and
 [docs/strategy/paperclip-differentiation.md](./docs/strategy/paperclip-differentiation.md)
-for the positioning notes that shaped this direction.
+for positioning notes that shaped this direction.

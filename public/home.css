@@ -513,6 +513,17 @@
   border-color: rgba(76, 201, 255, 0.22);
   background: rgba(23, 241, 255, 0.06);
 }
+.projects-agent-card {
+  padding: 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(76, 201, 255, 0.22);
+  background: rgba(23, 241, 255, 0.06);
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  flex-wrap: wrap;
+}
 .projects-flow-kicker {
   font-family: var(--mono);
   font-size: 10px;
@@ -530,6 +541,17 @@
   margin: 0;
   color: var(--ink-faint);
   font-size: 12px;
+}
+.projects-agent-copy {
+  max-width: 780px;
+  margin: 6px 0 0;
+  color: var(--ink-soft);
+  font-size: 13px;
+  line-height: 1.5;
+}
+.projects-agent-copy code {
+  font-family: var(--mono);
+  color: var(--accent-2);
 }
 .projects-list { display: flex; flex-direction: column; gap: 8px; }
 .projects-list-item {
@@ -593,6 +615,10 @@
   background: var(--armed);
   box-shadow: 0 0 10px rgba(47, 255, 208, 0.5);
 }
+.projects-step--warn .projects-step-dot {
+  background: var(--p1);
+  box-shadow: 0 0 10px rgba(255, 209, 102, 0.42);
+}
 .projects-step-main,
 .onboarding-step-label {
   color: var(--ink);
@@ -648,6 +674,16 @@
   min-height: 160px;
   line-height: 1.45;
 }
+.projects-prompt-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.projects-prompt {
+  min-height: 330px;
+  white-space: pre;
+}
+.projects-doctor-prompt { min-height: 280px; }
 .projects-starter-input { max-width: 260px; }
 .projects-btn {
   padding: 8px 12px;

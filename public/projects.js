@@ -7,6 +7,10 @@
     visible: false,
     data: null,
     setup: null,
+    state: null,
+    setupPrompt: "",
+    setupMode: "existing",
+    doctorPrompt: "",
     selectedId: null,
     advancedOpen: false,
   };
@@ -44,12 +48,14 @@
   }
 
   async function refresh() {
-    const [data, setup] = await Promise.all([
+    const [data, setup, state] = await Promise.all([
       getJSON("/api/projects"),
       getJSON("/api/setup/status"),
+      getJSON("/api/state"),
     ]);
     projects.data = data;
     projects.setup = setup;
+    projects.state = state;
     if (!projects.selectedId) projects.selectedId = data?.activeProject || data?.runtimeActiveProject || projectIds()[0] || "default";
     render();
   }
@@ -110,75 +116,84 @@
       name: name || id,
       workspaceDir: path,
       ticketIdPrefix: ($("#projects-quick-prefix")?.value.trim() || "DB").toUpperCase(),
+      preferredEngine: $("#projects-quick-engine")?.value.trim() || "unknown",
     };
   }
 
-  function quickPayload(mode) {
-    const q = quickValues();
-    return {
-      name: q.name,
-      workspaceDir: q.workspaceDir,
-      ticketsDir: "tickets",
-      ticketIdPrefix: q.ticketIdPrefix,
-      agentDir: ".agents",
-      memoryQueueDir: "memory/sync-queue",
-      workPrompt: "scripts/work-ticket-prompt.md",
-      fixCiPrompt: "scripts/fix-ci-prompt.md",
-      fixConflictPrompt: "scripts/fix-conflict-prompt.md",
-      statuses: ["triage", "backlog", "queued", "in_progress", "blocked", "human_review", "done"],
-      repos: {
-        workspace: {
-          path: ".",
-          baseBranch: "main",
-          worktree: false,
-          role: "cross-repo",
-        },
-      },
-      engines: { default: "claude", allowed: ["claude", "codex"] },
-    };
-  }
-
-  async function saveQuickProject(mode, btn) {
+  async function generateSetupPrompt(mode, btn, copy = false) {
     const q = quickValues();
     if (!q.id) return setStatus("Project id is required.", "bad");
-    if (btn) btn.disabled = true;
-    const res = await fetch(`/api/projects/${encodeURIComponent(q.id)}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(quickPayload(mode)),
-    });
-    if (res.ok) {
-      projects.data = await res.json();
-      projects.selectedId = q.id;
-      setStatus(mode === "new" ? "New project defaults saved." : "Existing repo imported.", "ok");
-    } else {
-      const e = await res.json().catch(() => ({}));
-      setStatus(e.error || `Save failed (${res.status})`, "bad");
-    }
-    if (btn) btn.disabled = false;
-    render();
-  }
-
-  async function copyAgentPrompt(btn) {
-    const q = quickValues();
+    projects.setupMode = mode || "existing";
     if (btn) btn.disabled = true;
     try {
       const res = await fetch("/api/setup/agent-prompt", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          mode: "existing",
+          mode: projects.setupMode,
           projectId: q.id,
           name: q.name,
           workspaceDir: q.workspaceDir,
           ticketIdPrefix: q.ticketIdPrefix,
+          preferredEngine: q.preferredEngine,
         }),
       });
-      const data = await res.json();
-      await navigator.clipboard.writeText(data.prompt || "");
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `Prompt failed (${res.status})`);
+      projects.setupPrompt = data.prompt || "";
+      render();
+      if (copy) {
+        await navigator.clipboard.writeText(projects.setupPrompt);
+        setStatus("Generated and copied setup prompt.", "ok");
+      } else {
+        setStatus("Generated setup prompt. Review it, then copy it into your coding agent.", "ok");
+      }
+    } catch (err) {
+      setStatus(`Could not generate setup prompt: ${err.message}`, "bad");
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  async function copyAgentPrompt(btn) {
+    if (!projects.setupPrompt) return generateSetupPrompt(projects.setupMode, btn, true);
+    if (btn) btn.disabled = true;
+    try {
+      await navigator.clipboard.writeText(projects.setupPrompt);
       setStatus("Copied setup prompt.", "ok");
     } catch {
       setStatus("Could not copy setup prompt.", "bad");
+    }
+    if (btn) btn.disabled = false;
+  }
+
+  async function generateDoctorPrompt(btn, copy = false) {
+    if (btn) btn.disabled = true;
+    try {
+      const res = await fetch("/api/setup/doctor-prompt", { method: "POST" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `Prompt failed (${res.status})`);
+      projects.doctorPrompt = data.prompt || "";
+      render();
+      if (copy) {
+        await navigator.clipboard.writeText(projects.doctorPrompt);
+        setDoctorStatus("Generated and copied Doctor prompt.", "ok");
+      } else {
+        setDoctorStatus("Generated Doctor prompt. Review it, then copy it into your coding agent.", "ok");
+      }
+    } catch (err) {
+      setDoctorStatus(`Could not generate Doctor prompt: ${err.message}`, "bad");
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  async function copyDoctorPrompt(btn) {
+    if (!projects.doctorPrompt) return generateDoctorPrompt(btn, true);
+    if (btn) btn.disabled = true;
+    try {
+      await navigator.clipboard.writeText(projects.doctorPrompt);
+      setDoctorStatus("Copied Doctor prompt.", "ok");
+    } catch {
+      setDoctorStatus("Could not copy Doctor prompt.", "bad");
     }
     if (btn) btn.disabled = false;
   }
@@ -269,10 +284,42 @@
     el.className = `projects-status ${tone ? `projects-status--${tone}` : ""}`;
   }
 
+  function setDoctorStatus(message, tone = "") {
+    const el = $("#projects-doctor-status");
+    if (!el) return;
+    el.textContent = message;
+    el.className = `projects-status ${tone ? `projects-status--${tone}` : ""}`;
+  }
+
   function setupCard() {
     const s = projects.setup || {};
-    const step = (ok, label, detail) => `
-      <li class="${ok ? "projects-step projects-step--done" : "projects-step"}">
+    const board = projects.state || {};
+    const restart = !!s.requiresRestart;
+    const mismatch = !!(
+      s.configuredActiveProject &&
+      s.runtimeActiveProject &&
+      s.configuredActiveProject !== s.runtimeActiveProject
+    );
+    const repoRows = Array.isArray(s.repoStatus) && s.repoStatus.length
+      ? s.repoStatus
+      : (s.repos || []).map((key) => ({ key, exists: null, path: "" }));
+    const repoDetail = repoRows.length
+      ? repoRows
+          .map((repo) => {
+            const state = repo.exists === true ? "ok" : repo.exists === false ? "missing" : "configured";
+            return `${repo.key}: ${state}${repo.path ? ` (${repo.path})` : ""}`;
+          })
+          .join("; ")
+      : "none";
+    const reposOk = repoRows.length > 0 && repoRows.every((repo) => repo.exists !== false);
+    const prompt = projects.doctorPrompt
+      ? `<div class="projects-prompt-wrap">
+          <label class="projects-label" for="projects-doctor-prompt">Doctor prompt</label>
+          <textarea class="projects-textarea projects-prompt projects-doctor-prompt" id="projects-doctor-prompt" rows="14" readonly>${esc(projects.doctorPrompt)}</textarea>
+        </div>`
+      : "";
+    const step = (ok, label, detail, tone = "") => `
+      <li class="${ok ? "projects-step projects-step--done" : "projects-step"}${tone ? ` projects-step--${tone}` : ""}">
         <span class="projects-step-dot"></span>
         <span class="projects-step-main">${esc(label)}</span>
         <span class="projects-step-detail">${esc(detail)}</span>
@@ -281,22 +328,36 @@
     return `
       <section class="home-card projects-setup-card">
         <div class="home-card-head">
-          <h3>Setup assistant</h3>
-          <span class="home-card-sub">${s.ready ? "ready" : "needs setup"}</span>
+          <h3>Readiness Doctor</h3>
+          <span class="home-card-sub">${s.ready && !restart && !mismatch ? "basic checks pass" : "check before arming"}</span>
         </div>
         <div class="home-card-body">
           <ul class="projects-steps">
+            ${step(!!s.configPath, "Setup status API", s.configPath ? "loaded from /api/setup/status" : "not loaded")}
+            ${step(!!s.configPath, "Config path", s.configPath || "unknown")}
+            ${step(!mismatch, "Active project match", mismatch ? `${s.configuredActiveProject} selected, ${s.runtimeActiveProject} running` : s.runtimeActiveProject || s.activeProject || "unknown")}
+            ${step(!restart, "Server restart", restart ? "needed to load the selected active project" : "not needed", restart ? "warn" : "")}
             ${step(!!s.ticketsDirExists, "Tickets directory", s.ticketsDir || "not configured")}
-            ${step(!!s.indexExists, "Ticket index", s.indexExists ? "_index.json exists" : "will be created")}
-            ${step((s.repos || []).length > 0, "Configured repo", (s.repos || []).join(", ") || "none")}
-            ${step(!!s.agentDirExists, "Agent directory", s.agentDir || "not configured")}
-            ${step(!!s.memoryQueueDirExists, "Memory queue", s.memoryQueueDir || "not configured")}
+            ${step(!!s.indexExists, "Ticket index", s.indexExists ? "_index.json exists" : "missing or will be created")}
+            ${step(reposOk, "Configured repos", repoDetail)}
+            ${step(board.armed === false, "Board armed", board.armed === true ? "armed" : board.armed === false ? "disarmed" : "unknown", board.armed === true ? "warn" : "")}
+            ${step(board.autopilot === false, "Autopilot", board.autopilot === true ? "on" : board.autopilot === false ? "off" : "unknown", board.autopilot === true ? "warn" : "")}
+            ${step(true, "Suggested check", "npm run validate:tickets")}
           </ul>
+          <p class="projects-note">
+            These are lightweight UI checks. Run Doctor with your coding agent for git auth, CLI, worktree, prompt, persona, PR, and process readiness.
+            ${restart ? esc(s.restartReason || "Restart the server to load updated project paths.") : ""}
+          </p>
           <div class="projects-actions">
+            <button class="projects-btn" id="projects-refresh-status" type="button">Refresh status</button>
             <button class="projects-btn projects-btn--primary" id="projects-init" type="button">Initialize folders</button>
+            <button class="projects-btn projects-btn--primary" id="projects-generate-doctor" type="button">Run Doctor prompt</button>
+            <button class="projects-btn" id="projects-copy-doctor" type="button">${projects.doctorPrompt ? "Copy Doctor prompt" : "Generate & copy Doctor"}</button>
             <input class="projects-input projects-starter-input" id="projects-starter-title" type="text" value="First HelmMate ticket" />
             <button class="projects-btn" id="projects-create-ticket" type="button">Create starter ticket</button>
           </div>
+          ${prompt}
+          <span class="projects-status" id="projects-doctor-status"></span>
         </div>
       </section>`;
   }
@@ -304,11 +365,18 @@
   function guidedSetupCard() {
     const { id, project } = selectedProject();
     const path = project.workspaceDir || ".";
+    const engine = project.engines?.default || projects.data?.projects?.[id]?.engines?.default || "unknown";
+    const prompt = projects.setupPrompt
+      ? `<div class="projects-prompt-wrap">
+          <label class="projects-label" for="projects-setup-prompt">Generated prompt</label>
+          <textarea class="projects-textarea projects-prompt" id="projects-setup-prompt" rows="16" readonly>${esc(projects.setupPrompt)}</textarea>
+        </div>`
+      : "";
     return `
       <section class="home-card projects-guided-card">
         <div class="home-card-head">
-          <h3>Guided setup</h3>
-          <span class="home-card-sub">quick start</span>
+          <h3>Setup handoff</h3>
+          <span class="home-card-sub">prompt only</span>
         </div>
         <div class="home-card-body">
           <div class="projects-form-grid projects-quick-grid">
@@ -316,25 +384,24 @@
             ${field("Name", "projects-quick-name", project.name || id || "Default")}
             ${field("Workspace path", "projects-quick-path", path)}
             ${field("Ticket prefix", "projects-quick-prefix", project.ticketIdPrefix || "DB")}
+            ${engineField(engine)}
           </div>
-          <div class="projects-flow-grid">
-            <div class="projects-flow">
-              <span class="projects-flow-kicker">Existing repo</span>
-              <span class="projects-flow-main">Import repo defaults</span>
-              <button class="projects-btn projects-btn--primary" id="projects-import-existing" type="button">Import existing repo</button>
+          <div class="projects-agent-card">
+            <div>
+              <span class="projects-flow-kicker">Use your coding agent</span>
+              <p class="projects-agent-copy">
+                Generate a prompt for Claude Code, Codex, or another local agent. The agent runs
+                <code>helm-setup-project</code>, inspects the workspace, previews changes, and keeps HelmMate disarmed.
+              </p>
             </div>
-            <div class="projects-flow">
-              <span class="projects-flow-kicker">New project</span>
-              <span class="projects-flow-main">Create clean defaults</span>
-              <button class="projects-btn" id="projects-save-new" type="button">Save new project</button>
-            </div>
-            <div class="projects-flow projects-flow--agent">
-              <span class="projects-flow-kicker">Agent setup</span>
-              <span class="projects-flow-main">Use helm-setup-project</span>
-              <button class="projects-btn" id="projects-copy-setup" type="button">Copy setup prompt</button>
+            <div class="projects-actions">
+              <button class="projects-btn projects-btn--primary" id="projects-generate-existing" type="button">Existing repo prompt</button>
+              <button class="projects-btn" id="projects-generate-new" type="button">New project prompt</button>
+              <button class="projects-btn" id="projects-copy-setup" type="button">${projects.setupPrompt ? "Copy prompt" : "Generate & copy"}</button>
             </div>
           </div>
-          <p class="projects-note">Advanced config stays below for multi-repo projects, custom prompts, and nonstandard statuses.</p>
+          ${prompt}
+          <p class="projects-note">This handoff is side-effect free. The setup agent should inspect read-only first, preview intended changes, preserve unrelated project entries, validate tickets, then suggest HelmMate Doctor as the follow-up check.</p>
           <span class="projects-status" id="projects-status"></span>
         </div>
       </section>`;
@@ -405,6 +472,20 @@
       </label>`;
   }
 
+  function engineField(value) {
+    const selected = String(value || "unknown");
+    const option = (engine, label) => `<option value="${esc(engine)}"${selected === engine ? " selected" : ""}>${esc(label)}</option>`;
+    return `
+      <label class="projects-field">
+        <span class="projects-label">Preferred engine</span>
+        <select class="projects-input" id="projects-quick-engine">
+          ${option("unknown", "Not sure")}
+          ${option("claude", "Claude Code")}
+          ${option("codex", "Codex")}
+        </select>
+      </label>`;
+  }
+
   function restartBanner() {
     if (!projects.data?.requiresRestartToSwitch) return "";
     return `
@@ -438,10 +519,13 @@
       </div>`;
 
     $("#projects-refresh")?.addEventListener("click", refresh);
+    $("#projects-refresh-status")?.addEventListener("click", refresh);
     $("#projects-init")?.addEventListener("click", (e) => initializeProject(e.currentTarget));
     $("#projects-create-ticket")?.addEventListener("click", (e) => createStarterTicket(e.currentTarget));
-    $("#projects-import-existing")?.addEventListener("click", (e) => saveQuickProject("existing", e.currentTarget));
-    $("#projects-save-new")?.addEventListener("click", (e) => saveQuickProject("new", e.currentTarget));
+    $("#projects-generate-doctor")?.addEventListener("click", (e) => generateDoctorPrompt(e.currentTarget));
+    $("#projects-copy-doctor")?.addEventListener("click", (e) => copyDoctorPrompt(e.currentTarget));
+    $("#projects-generate-existing")?.addEventListener("click", (e) => generateSetupPrompt("existing", e.currentTarget));
+    $("#projects-generate-new")?.addEventListener("click", (e) => generateSetupPrompt("new", e.currentTarget));
     $("#projects-copy-setup")?.addEventListener("click", (e) => copyAgentPrompt(e.currentTarget));
     $("#projects-advanced-toggle")?.addEventListener("click", () => {
       projects.advancedOpen = !projects.advancedOpen;

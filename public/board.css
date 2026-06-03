@@ -77,13 +77,11 @@ body::before {
 
 .brand { display: flex; align-items: center; gap: 10px; }
 .brand-mark {
-  width: 26px; height: 26px; border-radius: 50%;
-  border: 1px solid var(--accent);
-  background:
-    linear-gradient(90deg, transparent 44%, rgba(23, 241, 255, 0.7) 44% 56%, transparent 56%),
-    linear-gradient(0deg, transparent 44%, rgba(23, 241, 255, 0.7) 44% 56%, transparent 56%),
-    radial-gradient(circle, rgba(23, 241, 255, 0.42), rgba(76, 201, 255, 0.08) 42%, transparent 45%);
-  box-shadow: 0 0 18px rgba(23, 241, 255, 0.55), inset 0 0 16px rgba(23, 241, 255, 0.18);
+  width: 32px; height: 32px;
+  display: inline-block;
+  flex: none;
+  background: url("./helmmate-icon.png") center / contain no-repeat;
+  filter: drop-shadow(0 0 10px rgba(23, 241, 255, 0.45));
 }
 .brand-name {
   font-family: var(--mono);
@@ -485,13 +483,170 @@ body::before {
   font-size: 17px; line-height: 1.35; margin: 0 0 6px; padding-right: 28px;
 }
 .panel-id { font-family: var(--mono); font-size: 12px; color: var(--ink-soft); }
+.panel-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 12px;
+}
 .panel-section { margin-top: 22px; }
+.panel-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+.panel-section-head h3 { margin-bottom: 0; }
+.panel-section-actions {
+  display: flex;
+  gap: 8px;
+  flex: none;
+}
+.launch-preview-btn {
+  min-height: 30px;
+  padding: 5px 9px;
+  font-size: 11px;
+}
+.launch-preview-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.launch-preview-section {
+  border: 1px solid rgba(76, 201, 255, 0.16);
+  border-radius: var(--radius-sm);
+  background: rgba(3, 10, 22, 0.18);
+  padding: 14px 16px;
+}
+.launch-preview-content {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.launch-preview-kv {
+  margin-bottom: 0;
+}
+.launch-preview-command {
+  margin-top: 4px;
+  padding: 10px 12px;
+  border: 1px solid rgba(76, 201, 255, 0.16);
+  border-radius: var(--radius-sm);
+  background: #020711;
+  color: #9deaff;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.launch-preview-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 6px;
+}
+.launch-preview-grid h4 {
+  margin: 0 0 6px;
+  font-size: 11px;
+  color: var(--ink-faint);
+}
+.launch-preview-issues {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.launch-preview-issue {
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--ink-soft);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 7px 9px;
+  background: rgba(7, 21, 39, 0.54);
+}
+.launch-preview-issue--error {
+  color: var(--disarmed);
+  border-color: rgba(255, 95, 122, 0.28);
+  background: var(--disarmed-soft);
+}
+.launch-preview-issue--warning {
+  color: var(--p1);
+  border-color: rgba(255, 209, 102, 0.25);
+  background: rgba(255, 209, 102, 0.06);
+}
 .panel-section h3 {
   font-size: 11px; font-weight: 600; letter-spacing: 0.06em;
   text-transform: uppercase; color: var(--ink-faint);
   margin: 0 0 8px;
 }
+.panel-section .panel-section-head h3 { margin: 0; }
 .panel-desc { font-size: 13.5px; line-height: 1.6; color: var(--ink-soft); margin: 0; }
+
+.ticket-form { margin-top: 12px; }
+.ticket-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 18px;
+}
+.panel-input,
+.panel-textarea {
+  width: 100%;
+  border: 1px solid var(--line-strong);
+  background: rgba(7, 21, 39, 0.84);
+  color: var(--ink);
+  font-family: var(--font);
+  font-size: 14px;
+  line-height: 1.45;
+  padding: 9px 12px;
+  border-radius: var(--radius-sm);
+  box-shadow: inset 0 0 18px rgba(76, 201, 255, 0.06);
+}
+.panel-textarea {
+  resize: vertical;
+  min-height: 96px;
+}
+.panel-input:focus,
+.panel-textarea:focus {
+  outline: none;
+  border-color: var(--accent-2);
+  box-shadow: 0 0 0 1px rgba(23, 241, 255, 0.3), var(--glow);
+}
+.field-error {
+  margin: 6px 0 0;
+  color: var(--disarmed);
+  font-size: 12px;
+  line-height: 1.4;
+}
+.panel-form-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 22px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line);
+}
+.primary-btn {
+  min-height: 38px;
+  border: 1px solid rgba(23, 241, 255, 0.46);
+  border-radius: var(--radius-sm);
+  background: var(--accent-soft);
+  color: var(--accent-2);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0;
+  cursor: pointer;
+  padding: 8px 14px;
+  transition: border-color 0.15s, color 0.15s, box-shadow 0.15s, background 0.15s;
+}
+.primary-btn:hover {
+  background: rgba(23, 241, 255, 0.18);
+  border-color: var(--accent-2);
+  color: var(--ink);
+  box-shadow: var(--glow);
+}
 
 .ac-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
 .ac-list li {
@@ -516,6 +671,23 @@ body::before {
 .ref-list li {
   font-size: 12px; font-family: var(--mono); color: var(--ink-soft);
   padding: 4px 0; border-bottom: 1px dashed var(--line);
+}
+.note-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.note-list li {
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--ink-soft);
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: rgba(3, 10, 22, 0.22);
 }
 .kv { display: flex; gap: 10px; font-size: 13px; margin-bottom: 6px; }
 .kv-key { color: var(--ink-faint); width: 70px; flex: none; }
@@ -653,6 +825,36 @@ body::before {
   .panel-move {
     font-size: 16px;
     padding: 12px 14px;
+  }
+  .panel-input,
+  .panel-textarea {
+    font-size: 16px;
+    padding: 12px 14px;
+  }
+  .ticket-form-grid {
+    grid-template-columns: 1fr;
+  }
+  .panel-form-actions {
+    flex-direction: column;
+  }
+  .panel-form-actions .ghost-btn,
+  .panel-form-actions .primary-btn {
+    justify-content: center;
+    width: 100%;
+  }
+  .panel-section-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .panel-section-actions {
+    width: 100%;
+  }
+  .launch-preview-btn {
+    flex: 1;
+    justify-content: center;
+  }
+  .launch-preview-grid {
+    grid-template-columns: 1fr;
   }
 
   .card { padding: 14px; }

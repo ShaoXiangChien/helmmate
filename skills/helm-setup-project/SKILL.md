@@ -5,6 +5,11 @@ description: Set up or update a HelmMate project configuration and local scaffol
 
 # HelmMate Setup Project
 
+This skill is the handoff contract for external coding agents such as Claude
+Code, Codex, or another local repo agent. The HelmMate UI may only provide user
+intent; this skill performs the repo inspection, previews intended changes, then
+updates config and local scaffold files when appropriate.
+
 ## Inputs
 
 Use explicit user-provided values when present:
@@ -14,54 +19,92 @@ Use explicit user-provided values when present:
 - project name
 - workspace directory
 - ticket ID prefix
-- preferred engine
+- preferred engine, if known
 - whether to switch the active project
 
-If values are missing, infer conservative defaults from the repo and state your
-assumptions before finishing.
+If a value is missing, infer a conservative default from repo context and state
+the assumption in the final report.
 
-## Workflow
+## Non-Negotiable Safety
 
-1. Confirm the HelmMate repo root and the target project workspace. They may be
-   the same directory, but do not assume they are.
-2. Inspect the target workspace read-only:
-   - git root and current branch
-   - configured remotes
-   - likely base branch (`main`, `master`, or current branch)
-   - package manager and likely test command
-   - existing `tickets/`, `.agents/`, `memory/sync-queue/`, prompt files, and
-     `devboard.config.json`
-3. Read the HelmMate `devboard.config.json` if present. Preserve unrelated
-   project entries and top-level defaults.
-4. Decide whether the user is configuring the active project or adding another
-   project entry. If uncertain, add/update the project entry but do not switch
-   `activeProject`.
-5. Preview the intended changes in plain language before editing:
-   - project entry to create/update
-   - folders to initialize
-   - repo key/path/base branch/worktree choice
-   - engine defaults
-   - restart requirement, if any
-6. Create or update only the needed config fields:
-   - `activeProject`
-   - `projects.<id>.name`
-   - `workspaceDir`
-   - `ticketsDir`
-   - `ticketIdPrefix`
-   - `repos`
-   - `statuses`
-   - `agentDir`
-   - `memoryQueueDir`
-   - prompt paths
-   - `engines`
-7. Initialize folders with `npm run init` or `node bin/dev-board.mjs init` when
-   appropriate.
-8. Validate the result with `npm run validate:tickets`.
-9. If available, run the doctor skill or its lightweight checks after setup.
+- Inspect read-only before editing.
+- Preview intended config and folder changes before editing.
+- Never arm HelmMate.
+- Never enable autopilot.
+- Do not delete tickets.
+- Do not reset or discard git state.
+- Do not remove worktrees.
+- Do not switch branches unless the user explicitly asks.
+- Preserve unrelated `devboard.config.json` project entries and top-level
+  defaults.
 
-## Defaults
+## Read-Only Inspection Checklist
 
-Use these conservative defaults unless the user or repo context says otherwise:
+Confirm the HelmMate repository root and the target project workspace. They may
+be the same directory, but do not assume they are.
+
+Inspect the target workspace without changing files:
+
+- git root
+- current branch
+- default branch guess (`main`, `master`, remote HEAD, or current branch)
+- remote URL and provider guess
+- package manager
+- likely test command
+- repo name
+- dirty working tree
+- existing `devboard.config.json`
+- existing `tickets/`
+- existing `.agents/`
+- existing `memory/sync-queue/`
+- prompt files present or missing
+
+Useful read-only commands:
+
+```bash
+pwd
+git rev-parse --show-toplevel
+git branch --show-current
+git remote -v
+git remote show origin
+git status --short
+ls
+find . -maxdepth 3 -type f \( -name "package.json" -o -name "pnpm-lock.yaml" -o -name "yarn.lock" -o -name "package-lock.json" -o -name "uv.lock" -o -name "pyproject.toml" -o -name "Cargo.toml" -o -name "go.mod" \)
+```
+
+Only run commands that make sense for the workspace and shell. Do not run
+install, build, test, format, or migration commands during inspection.
+
+## Config Rules
+
+Read HelmMate's `devboard.config.json` before editing. Preserve unrelated
+project entries, unknown fields, and top-level defaults unless the user
+explicitly asks to change them.
+
+When adding or updating a project, write only fields needed for setup:
+
+- `projects.<id>.name`
+- `projects.<id>.workspaceDir`
+- `projects.<id>.ticketsDir`
+- `projects.<id>.ticketIdPrefix`
+- `projects.<id>.repos`
+- `projects.<id>.statuses`
+- `projects.<id>.agentDir`
+- `projects.<id>.memoryQueueDir`
+- `projects.<id>.workPrompt`
+- `projects.<id>.fixCiPrompt`
+- `projects.<id>.fixConflictPrompt`
+- `projects.<id>.engines`
+- `activeProject`, only when the user explicitly asks to switch
+
+Use repo key `workspace` for a simple single-repo setup unless the user or repo
+context clearly suggests another key. Set `worktree: false` for the first
+conservative setup unless the user requests worktrees.
+
+## Conservative Defaults
+
+Use these defaults unless user input or repo inspection provides a better
+answer:
 
 ```json
 {
@@ -69,49 +112,111 @@ Use these conservative defaults unless the user or repo context says otherwise:
   "ticketsDir": "tickets",
   "ticketIdPrefix": "DB",
   "repos": {
-    "workspace": { "path": ".", "baseBranch": "main", "worktree": false, "role": "cross-repo" }
+    "workspace": {
+      "path": ".",
+      "baseBranch": "main",
+      "worktree": false,
+      "role": "cross-repo"
+    }
   },
-  "statuses": ["triage", "backlog", "in_progress", "blocked", "human_review", "done"],
+  "statuses": ["triage", "backlog", "queued", "in_progress", "blocked", "human_review", "done"],
   "agentDir": ".agents",
   "memoryQueueDir": "memory/sync-queue",
+  "workPrompt": "scripts/work-ticket-prompt.md",
+  "fixCiPrompt": "scripts/fix-ci-prompt.md",
+  "fixConflictPrompt": "scripts/fix-conflict-prompt.md",
   "engines": { "default": "claude", "allowed": ["claude", "codex"] }
 }
 ```
 
-## Repo Config Heuristics
+Engine guidance:
 
-- Use repo key `workspace` for a single-repo project unless the user requested a
-  custom key.
-- Use `worktree: false` for the first conservative setup. Mention that worktrees
-  can be enabled later for safer concurrent agent runs.
-- Prefer the detected default branch. Fall back to `main`.
-- Keep prompt paths as defaults even if the prompt files do not exist yet; report
-  missing prompt files as follow-up setup work.
-- Keep new or imported tickets in `triage`. Do not seed work directly into
-  `in_progress`.
+- If the user named `claude`, set default engine to `claude`.
+- If the user named `codex`, set default engine to `codex`.
+- If unknown, prefer an existing configured default; otherwise use `claude`.
+- Keep `allowed` broad enough for both `claude` and `codex` unless the user asks
+  to restrict engines.
+
+Package manager and test command are inspection facts for the final report. Do
+not invent a test command if none is obvious.
+
+## Preview Before Editing
+
+Before writing files, show a concise preview:
+
+- project entry to create or update
+- whether `activeProject` will change
+- repo key, repo path, base branch, worktree setting, and role
+- engine default and allowed engines
+- folders to initialize
+- prompt paths that exist or are missing
+- whether a HelmMate server restart will be needed
+- validation command to run after edits
+
+Stop for user confirmation when the preview changes existing project config in a
+non-obvious way, switches `activeProject`, or touches anything outside the
+expected config/scaffold files.
+
+## Apply Setup
+
+After preview, make the smallest necessary edits.
+
+Initialize local scaffold when appropriate:
+
+```bash
+npm run init
+```
+
+If npm scripts are not available from the HelmMate repo root, use:
+
+```bash
+node bin/dev-board.mjs init
+```
+
+Expected scaffold:
+
+- tickets directory
+- ticket index
+- agent directory
+- memory sync queue directory
+
+Do not create starter tickets unless the user explicitly asks.
+
+## Validate
+
+Run:
+
+```bash
+npm run validate:tickets
+```
+
+If that command is unavailable, run:
+
+```bash
+node bin/validate-tickets.mjs
+```
+
+After setup, keep `helm-doctor` as the follow-up readiness check. If the doctor
+skill is available, run it or tell the user to run `/helm-doctor`. If not, read
+`skills/helm-doctor/SKILL.md` and perform its lightweight checks.
 
 ## Multi-Project Rule
 
-When adding a second project, put project-specific paths under `projects.<id>` and set `activeProject` only if the user asks to switch. Tell the user that the current server resolves paths at startup, so switching active project in config takes effect after restart.
-
-## Safety
-
-Never arm the board or enable autopilot as part of setup. Setup creates config
-and folders only.
-
-Do not delete or rewrite existing tickets unless the user explicitly asks.
-Do not reset git state, discard local changes, remove worktrees, or change
-branches unless the user explicitly asks.
+When adding another project, put project-specific paths under `projects.<id>`.
+Do not change `activeProject` unless the user explicitly asks. If `activeProject`
+changes, explain that the current server resolves project paths at startup and
+must restart before the UI uses the new paths.
 
 ## Final Report
 
 Finish with:
 
-- what changed;
-- what was preserved;
-- detected repo facts;
-- validation result;
-- whether the HelmMate server must restart;
-- any assumptions or missing files;
-- the next safe action, usually "review config, keep disarmed, then create or
-  import a triage ticket."
+- detected repo facts
+- what changed
+- what was preserved
+- validation result
+- whether the HelmMate server must restart
+- prompt files or folders still missing
+- assumptions made
+- next safe action, usually: review config, keep HelmMate disarmed, run
+  HelmMate Doctor, then create or import a triage ticket
