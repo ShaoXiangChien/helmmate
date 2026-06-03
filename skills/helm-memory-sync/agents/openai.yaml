@@ -1,0 +1,4 @@
+interface:
+  display_name: "HelmMate Memory Sync"
+  short_description: "Propose durable memory updates after ticket work."
+  default_prompt: "Propose memory updates from this session."

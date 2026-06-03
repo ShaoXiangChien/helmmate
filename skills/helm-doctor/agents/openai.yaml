@@ -1,0 +1,4 @@
+interface:
+  display_name: "HelmMate Doctor"
+  short_description: "Diagnose HelmMate setup, ticket, and launch readiness."
+  default_prompt: "Run a HelmMate readiness diagnosis."

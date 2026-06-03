@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/dev-board/index-row.schema.json",
+  "title": "Dev Board Ticket Index Row",
+  "type": "object",
+  "required": ["id", "title", "status", "priority", "repo", "depends_on"],
+  "properties": {
+    "id": { "type": "string" },
+    "title": { "type": "string" },
+    "epic": { "type": ["string", "null"] },
+    "status": { "type": "string" },
+    "priority": { "type": "string" },
+    "repo": { "type": "string" },
+    "depends_on": { "type": "array", "items": { "type": "string" } },
+    "origin": { "type": ["string", "null"] }
+  },
+  "additionalProperties": true
+}

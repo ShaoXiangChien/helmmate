@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>HelmMate</title>
+    <link rel="stylesheet" href="board.css" />
+    <link rel="stylesheet" href="home.css" />
+    <link rel="stylesheet" href="agents.css" />
+    <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
+  </head>
+  <body>
+    <div class="app-shell">
+      <!-- Left sidebar: brand + primary nav -->
+      <aside class="sidebar">
+        <div class="brand">
+          <span class="brand-mark"></span>
+          <span class="brand-name">HelmMate</span>
+        </div>
+        <nav class="side-nav" id="side-nav" role="tablist" aria-label="Views">
+          <button class="side-tab" id="tab-home" type="button" role="tab" aria-selected="false" data-view="home">
+            <span class="side-tab-label">Home</span>
+          </button>
+          <button class="side-tab" id="tab-board" type="button" role="tab" aria-selected="true" data-view="board">
+            <span class="side-tab-label">Board</span>
+          </button>
+          <button class="side-tab" id="tab-agents" type="button" role="tab" aria-selected="false" data-view="agents">
+            <span class="side-tab-label">Agents</span>
+          </button>
+          <button class="side-tab" id="tab-projects" type="button" role="tab" aria-selected="false" data-view="projects">
+            <span class="side-tab-label">Projects</span>
+          </button>
+        </nav>
+      </aside>
+
+      <!-- Main column: control bar + views -->
+      <div class="app-main">
+        <header class="topbar">
+          <div class="topbar-controls">
+            <div class="wip" id="wip">WIP &middot; <span id="wip-count">0</span>/<span id="wip-limit">2</span></div>
+
+            <button id="ready-toggle" class="ghost-btn" type="button" aria-pressed="false" title="Show ready tickets only">
+              Ready
+            </button>
+
+            <button id="arm-toggle" class="arm arm--off" type="button" aria-pressed="false">
+              <span class="arm-dot"></span>
+              <span class="arm-label">Disarmed</span>
+            </button>
+
+            <button id="engine-toggle" class="ghost-btn engine-toggle" type="button" title="Default engine for new launches">
+              Engine: <span class="engine-label">Claude</span>
+            </button>
+
+            <button id="refresh" class="ghost-btn" type="button" title="Refresh board">Refresh</button>
+          </div>
+        </header>
+
+        <!-- Home view -->
+        <section class="view view-home" id="view-home" hidden role="tabpanel" aria-labelledby="tab-home">
+          <main class="home" id="home"></main>
+        </section>
+
+        <!-- Board view (existing kanban, untouched IDs) -->
+        <section class="view view-board" id="view-board" role="tabpanel" aria-labelledby="tab-board">
+          <main class="board" id="board"></main>
+
+          <!-- Side panel -->
+          <div class="panel-overlay" id="panel-overlay" hidden></div>
+          <aside class="panel" id="panel" hidden aria-hidden="true">
+            <button class="panel-close" id="panel-close" type="button" aria-label="Close">&times;</button>
+            <div class="panel-body" id="panel-body"></div>
+          </aside>
+        </section>
+
+        <!-- Agents view (role personas + spend) -->
+        <section class="view view-agents" id="view-agents" hidden role="tabpanel" aria-labelledby="tab-agents">
+          <main class="agents" id="agents"></main>
+        </section>
+
+        <section class="view view-projects" id="view-projects" hidden role="tabpanel" aria-labelledby="tab-projects">
+          <main class="projects" id="projects"></main>
+        </section>
+      </div>
+    </div>
+
+    <div class="onboarding" id="onboarding" hidden></div>
+    <div class="toast" id="toast" hidden></div>
+
+    <script src="board.js"></script>
+    <script src="agents.js"></script>
+    <script src="projects.js"></script>
+    <script src="home.js"></script>
+    <script src="onboarding.js"></script>
+  </body>
+</html>

@@ -1,0 +1,343 @@
+/* HelmMate — Agents view.
+   Additive only: reuses .home-card, .home-card-head, .home-card-body,
+   .home-kv, .home-empty, .home-note, .home-na and all CSS custom properties
+   from board.css / home.css. Only NEW .agents-* classes are defined here. */
+
+/* ---------- Agents view container ---------- */
+.agents-view {
+  position: relative;
+  z-index: 1;
+  padding: 24px 28px 48px;
+}
+
+/* ---------- Header row (title + Refresh) ---------- */
+.agents-header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.agents-title {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--accent);
+  text-shadow: 0 0 18px rgba(76, 201, 255, 0.3);
+}
+
+.agents-refresh-btn {
+  appearance: none;
+  padding: 6px 16px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line-strong);
+  background: transparent;
+  color: var(--ink-soft);
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+.agents-refresh-btn:hover {
+  color: var(--accent-2);
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.agents-refresh-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* ---------- Error notice ---------- */
+.agents-error {
+  margin: 0 0 20px;
+  padding: 12px 16px;
+  border-radius: var(--radius);
+  border: 1px solid rgba(255, 95, 122, 0.35);
+  background: rgba(255, 95, 122, 0.07);
+  color: var(--disarmed);
+  font-size: 13px;
+}
+
+/* ---------- Spend section: two cards side-by-side ---------- */
+.agents-spend-section {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.agents-spend-card {
+  align-self: start;
+}
+
+/* Spend table inside a card */
+.agents-spend-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-family: var(--mono);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.agents-spend-table thead tr {
+  border-bottom: 1px solid var(--line);
+}
+.agents-spend-table th {
+  padding: 4px 8px 8px 0;
+  text-align: left;
+  font-size: 10px;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  font-weight: 600;
+}
+.agents-spend-table td {
+  padding: 7px 8px 7px 0;
+  color: var(--ink-soft);
+  border-bottom: 1px dashed var(--line);
+}
+.agents-spend-table tbody tr:last-child td {
+  border-bottom: none;
+}
+.agents-spend-name {
+  color: var(--ink);
+  font-weight: 600;
+}
+.agents-spend-name--opus {
+  color: var(--p1);
+}
+.agents-spend-num {
+  text-align: right;
+  white-space: nowrap;
+}
+.agents-spend-table th:not(:first-child),
+.agents-spend-table td:not(:first-child) {
+  text-align: right;
+}
+
+/* ---------- Editor grid: one card per agent role ---------- */
+.agents-editor-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(440px, 1fr));
+  gap: 16px;
+  align-items: start;
+}
+
+.agents-editor-card {
+  /* home-card already provides the surface + border + shadow */
+}
+
+/* ---------- Model badge (in card header, next to h3) ---------- */
+.agents-badge {
+  display: inline-block;
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  padding: 2px 8px;
+  border-radius: 6px;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+.agents-badge--sonnet {
+  color: var(--armed);
+  background: var(--armed-soft);
+  border-color: rgba(47, 255, 208, 0.3);
+}
+.agents-badge--opus {
+  color: var(--p1);
+  background: rgba(255, 209, 102, 0.1);
+  border-color: rgba(255, 209, 102, 0.28);
+}
+.agents-badge--haiku {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: rgba(76, 201, 255, 0.28);
+}
+.agents-badge--dim {
+  color: var(--p2);
+  background: rgba(138, 166, 186, 0.12);
+  border-color: rgba(138, 166, 186, 0.22);
+}
+
+/* ---------- Runs / spend line below badge ---------- */
+.agents-runs-line {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+  margin-bottom: 2px;
+}
+.agents-codex-line {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink-soft);
+  font-variant-numeric: tabular-nums;
+}
+.agents-codex-line span {
+  color: #c7d2fe;
+}
+
+/* ---------- Form field layouts ---------- */
+.agents-field-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.agents-field-col {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.agents-label {
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+/* Select — model picker */
+.agents-select {
+  appearance: none;
+  padding: 6px 28px 6px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line-strong);
+  background: rgba(3, 8, 18, 0.7)
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%2355758b'/%3E%3C/svg%3E")
+    no-repeat right 10px center;
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.15s;
+  min-width: 110px;
+}
+.agents-select:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(76, 201, 255, 0.14);
+}
+
+/* Single-line description input */
+.agents-input {
+  padding: 7px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+  background: rgba(3, 8, 18, 0.6);
+  color: var(--ink);
+  font-family: var(--font);
+  font-size: 13px;
+  width: 100%;
+  transition: border-color 0.15s;
+}
+.agents-input::placeholder { color: var(--ink-faint); }
+.agents-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(76, 201, 255, 0.12);
+}
+
+/* Markdown body textarea */
+.agents-textarea {
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+  background: rgba(3, 8, 18, 0.72);
+  color: var(--ink-soft);
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.6;
+  width: 100%;
+  resize: vertical;
+  tab-size: 2;
+  transition: border-color 0.15s;
+}
+.agents-textarea::placeholder { color: var(--ink-faint); }
+.agents-textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(76, 201, 255, 0.12);
+  color: var(--ink);
+}
+
+/* ---------- Save row: button + inline status ---------- */
+.agents-save-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-top: 2px;
+}
+
+.agents-save-btn {
+  appearance: none;
+  padding: 7px 20px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent-2);
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, box-shadow 0.15s;
+}
+.agents-save-btn:hover {
+  background: rgba(76, 201, 255, 0.22);
+  box-shadow: 0 0 16px rgba(23, 241, 255, 0.2);
+}
+.agents-save-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+  box-shadow: none;
+}
+
+/* Inline save status message */
+.agents-status {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-faint);
+  transition: color 0.2s;
+}
+.agents-status--ok {
+  color: var(--armed);
+}
+.agents-status--err {
+  color: var(--disarmed);
+}
+
+/* ---------- File path line (muted, monospace) ---------- */
+.agents-path {
+  margin-top: 4px;
+  word-break: break-all;
+}
+
+/* ---------- Responsive ---------- */
+@media (max-width: 1000px) {
+  .agents-spend-section {
+    grid-template-columns: 1fr;
+  }
+  .agents-editor-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 720px) {
+  .agents-view { padding: 18px 16px 36px; }
+  .agents-spend-section { gap: 12px; }
+  .agents-editor-grid { gap: 12px; }
+}

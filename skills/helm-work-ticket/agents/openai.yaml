@@ -1,0 +1,4 @@
+interface:
+  display_name: "HelmMate Worker"
+  short_description: "Work a HelmMate ticket through PR handoff."
+  default_prompt: "Work this HelmMate ticket."

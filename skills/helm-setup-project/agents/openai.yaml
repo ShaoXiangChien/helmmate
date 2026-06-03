@@ -1,0 +1,4 @@
+interface:
+  display_name: "HelmMate Setup"
+  short_description: "Onboard an existing repo into HelmMate safely."
+  default_prompt: "Onboard this repository into HelmMate. Inspect read-only first, preview config changes, preserve unrelated project entries, validate tickets, and keep HelmMate disarmed."

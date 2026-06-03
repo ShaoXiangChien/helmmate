@@ -1,0 +1,18 @@
+{
+  "_comment": "The usage %/cap is now READ LIVE from Anthropic's own endpoint (GET /api/oauth/usage, same source as the /usage TUI and the vusage CLI) via lib/official-usage.js — block.pct/weekly.pct carry source:'official' when reachable. The token_metric/budget/calibrate fields below are the FALLBACK estimate, used only when the endpoint is unreachable or the OAuth token is missing/expired (source:'estimate'). The circuit breaker (trips on an ACTUAL limit-hit from a session's error event) remains the hard safety. day_cap_pct/night_cap_pct now gate against the REAL 5h utilization, weekly_cap_pct against the REAL 7-day utilization. require_official_usage=true makes autopilot FAIL SAFE: it pauses (rather than trusting the unreliable estimate) whenever the live endpoint is unavailable — important for unattended overnight runs. token_metric options: total | io | io_cache_create | weighted. night_only=true means the autonomous scheduler only dispatches 00:00-08:00; manual drag-to-In-Progress is never gated. opus_cap_pct is a STRICTER cap (vs day/night cap) applied ONLY to Opus tickets (architect role or an explicit ticket.model='opus' opt-up) so an unattended run keeps dispatching cheap Sonnet work but won't drain the week on Opus — see lib/roles.js for role->model resolution. preflight_triage=true runs a cheap Haiku pass before each full dispatch (lib/preflight.js); a confident 'not ready' bounces the ticket to triage instead of wasting a full session — it FAILS OPEN (any error/timeout dispatches normally), set false to disable.",
+  "block_token_budget": 30000000,
+  "weekly_token_budget": 300000000,
+  "token_metric": "weighted",
+  "calibrate": true,
+  "day_window_hours": [8, 24],
+  "night_only": true,
+  "day_cap_pct": 0.8,
+  "night_cap_pct": 0.95,
+  "weekly_cap_pct": 0.95,
+  "opus_cap_pct": 0.5,
+  "preflight_triage": true,
+  "require_official_usage": true,
+  "autopilot_allowlist": [],
+  "poll_interval_min": 20,
+  "autopilot": false
+}

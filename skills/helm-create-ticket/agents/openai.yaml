@@ -1,0 +1,4 @@
+interface:
+  display_name: "HelmMate Ticket Writer"
+  short_description: "Turn ideas into valid HelmMate tickets."
+  default_prompt: "Create a HelmMate ticket from this idea."

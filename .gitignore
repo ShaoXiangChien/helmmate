@@ -1,0 +1,14 @@
+node_modules/
+.claude/
+.codex/
+.agents/
+logs/
+worktrees/
+tickets/
+memory/sync-queue/*.md
+memory/sync-queue/applied/
+.state.json
+.runs.json
+.official-usage-cache.json
+*.local.json
+.DS_Store

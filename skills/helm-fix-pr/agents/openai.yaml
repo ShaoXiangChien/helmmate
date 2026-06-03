@@ -1,0 +1,4 @@
+interface:
+  display_name: "HelmMate PR Fixer"
+  short_description: "Fix CI failures or conflicts for an existing ticket PR."
+  default_prompt: "Fix this HelmMate ticket PR."

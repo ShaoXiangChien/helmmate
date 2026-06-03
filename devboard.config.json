@@ -1,0 +1,87 @@
+{
+  "activeProject": "default",
+  "workspaceDir": ".",
+  "ticketsDir": "tickets",
+  "ticketIdPrefix": "DB",
+  "defaultPort": 4317,
+  "host": "127.0.0.1",
+  "repos": {
+    "workspace": {
+      "path": ".",
+      "baseBranch": "main",
+      "worktree": false,
+      "role": "cross-repo"
+    }
+  },
+  "statuses": [
+    "triage",
+    "backlog",
+    "queued",
+    "in_progress",
+    "blocked",
+    "human_review",
+    "done"
+  ],
+  "agentDir": ".agents",
+  "memoryQueueDir": "memory/sync-queue",
+  "workPrompt": "scripts/work-ticket-prompt.md",
+  "fixCiPrompt": "scripts/fix-ci-prompt.md",
+  "fixConflictPrompt": "scripts/fix-conflict-prompt.md",
+  "roles": {
+    "cross-repo": {
+      "model": "sonnet"
+    },
+    "architect": {
+      "model": "opus"
+    }
+  },
+  "roleByRepo": {
+    "workspace": "cross-repo"
+  },
+  "engines": {
+    "default": "claude",
+    "allowed": [
+      "claude",
+      "codex"
+    ]
+  },
+  "defaultWipLimit": 2,
+  "agentModel": "sonnet",
+  "projects": {
+    "default": {
+      "name": "Default",
+      "workspaceDir": ".",
+      "ticketsDir": "tickets",
+      "ticketIdPrefix": "DB",
+      "repos": {
+        "workspace": {
+          "path": ".",
+          "baseBranch": "main",
+          "worktree": false,
+          "role": "cross-repo"
+        }
+      },
+      "statuses": [
+        "triage",
+        "backlog",
+        "queued",
+        "in_progress",
+        "blocked",
+        "human_review",
+        "done"
+      ],
+      "agentDir": ".agents",
+      "memoryQueueDir": "memory/sync-queue",
+      "workPrompt": "scripts/work-ticket-prompt.md",
+      "fixCiPrompt": "scripts/fix-ci-prompt.md",
+      "fixConflictPrompt": "scripts/fix-conflict-prompt.md",
+      "engines": {
+        "default": "claude",
+        "allowed": [
+          "claude",
+          "codex"
+        ]
+      }
+    }
+  }
+}
