@@ -15,7 +15,7 @@ Target first-session outcome:
 
 ```text
 choose repo -> inspect setup -> review proposed config/tickets -> stay disarmed
--> edit/approve ticket -> dry-run launch -> optionally arm and run
+-> edit/approve ticket -> preview launch -> optionally arm and run
 ```
 
 ## Product Principles
@@ -25,7 +25,7 @@ choose repo -> inspect setup -> review proposed config/tickets -> stay disarmed
 - **Preview before write:** Show what will change before writing config,
   tickets, prompts, folders, or worktrees.
 - **No ambiguous execution states:** A ticket should not look "in progress"
-  unless a session is actually running, or the UI clearly labels it as queued.
+  unless a session is actually running or the UI clearly says it did not launch.
 - **Human review is the product:** The interface should help the user inspect,
   edit, and approve AI work, not only launch it.
 - **Agent setup is delegable but auditable:** Generated setup prompts should say
@@ -162,35 +162,42 @@ Objective:
 Make it impossible for a ticket to look actively running when no agent session
 exists.
 
-Decisions to make:
+V1 boundary:
 
-- Add a real `queued` status, or keep statuses unchanged and prevent moving to
-  `in_progress` while disarmed/WIP-blocked.
-- Decide whether "queued because disarmed" belongs in `backlog`, `triage`, or a
-  separate visual state.
+- Preserve the existing status taxonomy.
+- Focus on making failed launch intent visually honest.
+- Do not introduce a new `queued` status in V1.
 
-Recommended path:
+V1 plan:
+
+- If a user tries to move a ticket to `in_progress` while the board is disarmed,
+  do not persist `in_progress`.
+- Leave the ticket in its original status and show a clear toast/panel message:
+  "Board is disarmed. Ticket was not launched."
+- For WIP limit, also avoid persisting `in_progress`; add a note or visible
+  message that the ticket could not launch because WIP is full.
+- Keep `blocked` only for ticket problems, unmet dependencies, and preflight
+  failure.
+- Only set `in_progress` after a process is launched and recorded in WIP.
+
+Later work:
 
 - Add a first-class `queued` state only for launch blockers that may clear
   without ticket edits, such as disarmed board or WIP limit.
-- Keep `blocked` for ticket problems, unmet dependencies, and preflight failure.
-- Do not set `in_progress` until a process is launched and recorded in WIP.
+- Add scheduler-managed queue semantics.
 
 Likely files:
 
 - `public/board.js`
 - `lib/launcher.js`
-- `lib/scheduler.js`
-- `devboard.config.json`
-- `README.md`
-- `schemas/ticket.schema.json`
+- `server.js`
 
 Acceptance criteria:
 
 - Moving a ticket toward execution while disarmed does not leave it looking like
   actively running work.
 - WIP count, ticket status, card badge, toast, and live log agree.
-- The side panel explains why the ticket is queued and how to proceed.
+- The side panel explains why the ticket did not launch and how to proceed.
 - Ticket validation passes.
 
 Test cases:
@@ -244,12 +251,12 @@ Completion notes:
 
 Objective:
 
-Replace the over-scoped "repo setup wizard" with a simple UI handoff that helps
-the user ask their existing coding agent to run HelmMate's setup skill.
+Create a simple UI handoff that helps the user ask their existing coding agent
+to run HelmMate's setup skill.
 
-Important scope correction:
+V1 boundary:
 
-- Do not make the UI responsible for full repo inspection, package-manager
+- The UI is not responsible for full repo inspection, package-manager
   detection, git analysis, or config diffing yet.
 - The UI should collect enough intent to create a high-quality agent prompt.
 - The user's Claude Code, Codex, or other coding agent should run
@@ -300,15 +307,15 @@ POST /api/setup/agent-prompt
 GET /api/setup/status
 ```
 
-Optional later API shape, only after the skill-led flow works:
+Later API shape:
 
 ```text
 POST /api/setup/inspect-repo
 POST /api/setup/preview-project
 ```
 
-Do not add `POST /api/setup/apply-project` until there is a strong reason for
-the UI itself to write project config.
+V1 excludes `POST /api/setup/apply-project`; setup writes should happen through
+the user's coding agent and the `helm-setup-project` skill.
 
 Skill work:
 
@@ -350,7 +357,7 @@ Acceptance criteria:
 - After the user returns, the UI can refresh setup status and explain whether a
   restart is needed.
 
-Deferred:
+Later work:
 
 - Native repo inspection in the UI.
 - Native config diff preview.
@@ -363,19 +370,30 @@ Objective:
 
 Let users review and improve AI-generated tickets without editing JSON by hand.
 
-Add UI support for:
+V1 boundary:
+
+- V1 should edit only the fields that most affect whether an agent can do useful
+  work.
+
+V1 UI support:
 
 - create ticket;
 - edit title;
 - edit description;
 - edit acceptance criteria;
 - edit context refs;
-- edit dependencies;
-- edit priority/status/repo;
-- edit branch;
-- edit PR URL or review handoff;
+- edit priority, status, and repo;
 - add reviewer notes;
 - validate before save.
+
+Later work:
+
+- dependency picker and dependency graph validation;
+- branch editing;
+- PR URL / review handoff editing;
+- role/persona editing;
+- full JSON editor;
+- bulk editing.
 
 Recommended pattern:
 
@@ -383,6 +401,8 @@ Recommended pattern:
 - Add an `Edit` mode with explicit `Save` and `Cancel`.
 - Validate on save and show field-level errors.
 - Keep JSON as canonical storage.
+- Use existing `PATCH /api/tickets/:id` where possible before inventing a large
+  new ticket-update API.
 
 Likely files:
 
@@ -391,30 +411,33 @@ Likely files:
 - `server.js`
 - `lib/tickets.js`
 - `lib/validation.js`
-- `schemas/ticket.schema.json`
 
 Acceptance criteria:
 
-- A user can create a launch-ready ticket from the Board.
+- A user can create a useful triage/backlog ticket from the Board.
 - A user can fix missing acceptance criteria from the side panel.
-- Invalid dependency IDs are clearly flagged.
 - `_index.json` stays in sync after edits.
 - Ticket validation passes after UI edits.
 
-### Session 5: Launch Preview And Dry Run
+### Session 5: Launch Preview
 
 Objective:
 
 Give the user a clear, auditable preview before any agent process starts.
 
-Add:
+V1 boundary:
 
-- `Dry run` action on ticket panel.
+- V1 should be a read-only launch preview that explains what would happen using
+  the same helpers where easy, without spawning anything.
+
+V1 add:
+
+- `Launch preview` section or button on ticket panel.
 - Launch preview section:
   - engine;
   - model/effort;
   - role/persona;
-  - exact command shape;
+  - command summary, not necessarily every argv token;
   - cwd;
   - branch;
   - worktree path/mode;
@@ -422,21 +445,23 @@ Add:
   - expected handoff status;
   - blockers/warnings.
 
-API shape:
+V1 API shape:
 
 ```text
 GET /api/tickets/:id/launch-preview
-POST /api/tickets/:id/dry-run
 ```
 
-Implementation note:
+Implementation notes:
 
-Extract command construction from `launchTicket()` so preview and real launch
-share the same source of truth.
+- V1 excludes `POST /api/tickets/:id/dry-run`.
+- The preview must not spawn an agent.
+- It is acceptable for V1 to preview a redacted/summary command if exact argv
+  extraction would require risky refactoring.
+- Prefer reusing `resolveEngine`, role/model helpers, path config, and existing
+  preflight checks.
 
 Likely files:
 
-- `lib/launcher.js`
 - `lib/engine.js`
 - new `lib/launch-preview.js`
 - `server.js`
@@ -445,10 +470,18 @@ Likely files:
 
 Acceptance criteria:
 
-- Dry run never spawns an agent.
-- Preview matches the command path used by real launch.
+- Preview never spawns an agent.
+- Preview explains the same engine/role/model/path choices the launcher would
+  use.
 - Missing CLIs/prompt files/persona files appear as warnings before launch.
 - User can copy preview details for debugging.
+
+Later work:
+
+- exact argv parity with launch;
+- command-builder refactor;
+- fake engine for launch tests;
+- full dry-run log ledger.
 
 ### Session 6: Doctor / Readiness Page
 
@@ -456,7 +489,31 @@ Objective:
 
 Create a single place that answers "is HelmMate safe and ready for this repo?"
 
-Checks:
+V1 boundary:
+
+- V1 should combine a lightweight UI checklist with a copyable `helm-doctor`
+  prompt, mirroring the setup-handoff approach.
+
+V1 checks in UI:
+
+- setup status from `/api/setup/status`;
+- config path;
+- active project/runtime project mismatch;
+- restart needed;
+- ticket directory/index exist;
+- configured repos exist by key, if available from current APIs;
+- board armed/autopilot state;
+- ticket validation command shown as a suggested check.
+
+V1 agent handoff:
+
+- Add a "Run Doctor with your coding agent" prompt that routes through
+  `helm-doctor`.
+- The skill does deeper checks: git auth, CLI availability, dirty worktrees,
+  prompt files, persona files, branch collisions, PR readiness, and process
+  reconciliation.
+
+Full native checks for later:
 
 - config path;
 - active project vs runtime project;
@@ -479,17 +536,26 @@ Checks:
 Likely files:
 
 - `server.js`
-- new `lib/doctor.js`
 - `public/home.js`
-- new `public/doctor.js` or integrate into Home/Projects
+- `public/projects.js`
+- `lib/setup-agent.js` or a new prompt builder
+- `skills/helm-doctor/SKILL.md`
 - CSS files for shared status rows
 
 Acceptance criteria:
 
-- The user can run Doctor before arming the board.
-- Doctor distinguishes warnings from blockers.
-- Every blocker has a suggested next action.
-- Doctor does not mutate project files.
+- The user can see basic readiness before arming the board.
+- The user can copy a high-quality Doctor prompt.
+- The Doctor prompt works even when slash commands are unavailable.
+- The skill distinguishes blockers from warnings and stays read-only unless the
+  user explicitly asks for fixes.
+
+Later work:
+
+- `GET /api/doctor`;
+- dedicated Doctor page;
+- process reconciliation UI;
+- automatic CLI/git/PR probing from the server.
 
 ### Session 7: Reframe Home For First-Run Readiness
 
@@ -508,7 +574,8 @@ Lifecycle states:
 
 Recommended Home layout:
 
-- Before runs exist: readiness checklist + next actions.
+- Before runs exist: readiness checklist + next actions, using existing APIs
+  first.
 - After runs exist: current ops dashboard.
 - Usage cards should be secondary when the selected/default engine does not need
   that provider.
@@ -517,9 +584,7 @@ Likely files:
 
 - `public/home.js`
 - `public/home.css`
-- `server.js`
-- `lib/state.js`
-- setup/doctor APIs
+- existing `/api/setup/status`, `/api/config`, `/api/state`, `/api/scheduler`
 
 Acceptance criteria:
 
@@ -527,15 +592,24 @@ Acceptance criteria:
 - Usage endpoint failures are quiet unless they block the selected engine.
 - User sees a clear next step based on current readiness.
 
+Later work:
+
+- new lifecycle-state backend API;
+- custom dashboard layouts;
+- provider-specific usage setup wizard.
+
 ### Session 8: Agent Setup Surface
 
 Objective:
 
 Turn Agents into a pre-run trust surface as well as a post-run accounting page.
 
-Add:
+V1 boundary:
 
-- engine availability;
+- V1 should be read-only and explanatory.
+
+V1 add:
+
 - default engine explanation;
 - role-to-repo mapping;
 - persona file preview/status;
@@ -543,6 +617,13 @@ Add:
 - prompt file status;
 - permission/sandbox warning;
 - logs and memory proposal locations.
+
+Later work:
+
+- engine availability probing;
+- editing roles/personas from this surface;
+- custom engine command configuration;
+- prompt file creation from the UI.
 
 Likely files:
 
@@ -559,6 +640,7 @@ Acceptance criteria:
   mean before launching.
 - Missing persona/prompt files are visible.
 - Engine/model routing can be reviewed without opening JSON.
+- No new write actions are introduced in V1.
 
 ### Session 9: Migration Imports
 
@@ -566,16 +648,24 @@ Objective:
 
 Create paths from existing work into HelmMate tickets.
 
-Start with local imports before external connectors:
+V1 boundary:
+
+- Native imports from files, GitHub, Linear, branches, and docs are each their
+  own product surface.
+- V1 should be skill-first, not parser-first.
+
+Start with agent-assisted local imports before external connectors:
 
 - paste rough notes;
-- import Markdown file;
-- scan TODO-style files;
-- generate tickets from README/roadmap docs;
-- import open branches as review tickets.
+- optionally point the agent at Markdown/TODO/roadmap files;
+- ask the agent to use `helm-create-ticket`;
+- let the user review resulting JSON tickets on the Board.
 
 Later imports:
 
+- native Markdown file import;
+- TODO/doc scanning;
+- open branches as review tickets;
 - GitHub issues;
 - Linear issues;
 - GitHub PRs;
@@ -583,26 +673,36 @@ Later imports:
 
 Recommended first version:
 
-- `Import from notes` modal.
+- `Import from notes` handoff.
 - User pastes text.
-- Agent/setup prompt turns notes into valid tickets.
-- User reviews generated tickets before writing.
+- UI generates a prompt that routes the user's coding agent through
+  `helm-create-ticket`.
+- Agent writes one or more `triage` tickets.
+- User reviews generated tickets on the Board.
 
 Likely files:
 
-- `server.js`
-- `lib/tickets.js`
-- new `lib/imports.js`
 - `public/board.js`
 - `public/projects.js`
 - skills under `skills/helm-create-ticket`
+- `lib/setup-agent.js` or a new prompt builder
 
 Acceptance criteria:
 
-- User can turn pasted notes into one or more draft tickets.
-- No ticket is written without preview.
+- User can copy a high-quality prompt that turns pasted notes into one or more
+  triage tickets.
+- `helm-create-ticket` previews proposed tickets for bulk/import work unless
+  the user explicitly asked it to create tickets immediately.
 - Generated tickets validate.
-- User can edit before save.
+- User can review/edit generated triage tickets on the Board before launching
+  anything.
+
+Later work:
+
+- native note parser;
+- preview-before-write inside HelmMate UI;
+- external connectors;
+- Markdown ticket import/export.
 
 ## Suggested Order
 
@@ -610,23 +710,24 @@ Do these first:
 
 1. Session 1: execution-state trust.
 2. Session 2: empty Board actions.
-3. Session 4: ticket editing.
-4. Session 3: existing repo wizard.
-5. Session 5: dry run.
+3. Session 3: lightweight repo setup handoff.
+4. Session 4: minimal ticket creation/editing.
+5. Session 5: launch preview.
 
 Then:
 
-6. Session 6: Doctor.
+6. Session 6: lightweight Doctor handoff/readiness.
 7. Session 7: readiness Home.
-8. Session 8: agent setup surface.
-9. Session 9: imports.
+8. Session 8: read-only agent setup surface.
+9. Session 9: skill-assisted imports.
 
 Rationale:
 
 - Fixing status ambiguity protects user trust immediately.
-- Empty states and editing reduce first-run friction quickly.
-- The repo wizard and dry run are the biggest adoption unlocks, but they are
-  cleaner once execution states and ticket editing are stable.
+- Empty states and setup handoff reduce first-run friction quickly.
+- Ticket editing and launch preview make the first real agent run feel safer.
+- Doctor, Home, Agents, and imports should follow the same pattern: lightweight
+  UI first, skill-assisted depth later.
 
 ## Cross-Cutting UX Copy
 
@@ -634,7 +735,7 @@ Use plain, reassuring labels:
 
 - "Connect existing repo" instead of "Import repo defaults".
 - "Preview setup" before "Save project".
-- "Queued, not running" when disarmed or WIP-limited.
+- "Not launched" when disarmed or WIP-limited.
 - "Ready to launch" only when dependencies, repo, prompt, and ticket shape pass.
 - "Dry run" for command preview.
 - "Doctor" or "Readiness" for environment checks.
@@ -651,12 +752,12 @@ Avoid copy that implies hidden automation:
 The gap work is done when a new solo-founder user can:
 
 1. Start HelmMate locally.
-2. Connect an existing repo without editing JSON.
-3. See exactly what HelmMate will create or change.
+2. Generate a setup handoff prompt for an existing repo without editing JSON.
+3. Ask their coding agent to run `helm-setup-project` and see what changed.
 4. Keep the board disarmed throughout setup.
 5. Create or import a useful first ticket.
 6. Edit the ticket into launch-ready shape.
-7. Run Doctor and understand any blockers.
-8. Dry-run the launch command.
+7. Run or copy a Doctor/readiness check and understand any blockers.
+8. Preview launch routing before starting an agent.
 9. Arm and launch only after an explicit decision.
 10. Review logs, branch, PR, and handoff from the ticket panel.

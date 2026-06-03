@@ -600,6 +600,7 @@ function ColumnEmptyHint({ status, tickets, readyOnly }: AnyObj) {
   const hints: AnyObj = {
     triage: "No new tickets waiting for review.",
     backlog: "No tickets ready to queue.",
+    queued: "No launch requests waiting.",
     in_progress: "No agent sessions running.",
     blocked: "No blocked tickets.",
     human_review: "No handoffs waiting.",
@@ -663,18 +664,20 @@ function EngineTag({ ticket, resolveEngine, boardDefaultEngine }: AnyObj) {
 }
 
 function TicketCard(props: AnyObj) {
-  const { ticket, isReady, isBlocked, isSessionRunning, isSessionPaused, openTicket, stopSession, resumeSession } = props;
+  const { ticket, isReady, isBlocked, isSessionRunning, isQueued, isSessionPaused, openTicket, stopSession, resumeSession } = props;
   const blocked = isBlocked(ticket);
   const ready = isReady(ticket);
   const running = isSessionRunning(ticket.id);
+  const queued = isQueued(ticket);
   const paused = isSessionPaused(ticket);
   return (
-    <div className={`card${blocked ? " blocked" : ""}${running ? " running" : ""}${paused ? " paused" : ""}`} data-id={ticket.id} onClick={() => openTicket(ticket.id)}>
+    <div className={`card${blocked ? " blocked" : ""}${running ? " running" : ""}${queued ? " queued" : ""}${paused ? " paused" : ""}`} data-id={ticket.id} onClick={() => openTicket(ticket.id)}>
       <div className="card-top">
         <span className="card-id">{ticket.id}</span>
         {priorityPill(ticket.priority)}
         {blocked ? <span className="badge-blocked">blocked</span> : null}
         {ready ? <span className="badge-ready">ready</span> : null}
+        {queued ? <span className="badge-queued">queued</span> : null}
         {running ? <span className="badge-running">● running</span> : null}
         {paused ? <span className="badge-paused">⏸ paused</span> : null}
       </div>
@@ -692,10 +695,29 @@ function TicketCard(props: AnyObj) {
   );
 }
 
+function queuedExplanation(ticket: AnyObj) {
+  if (ticket.queued_reason === "disarmed") {
+    return {
+      title: "Queued - board disarmed",
+      body: "This ticket has a launch request, but HelmMate will not start an agent until the board is armed. Arm the board to launch it when a WIP slot is free.",
+    };
+  }
+  if (ticket.queued_reason === "wip_limit") {
+    return {
+      title: "Queued - WIP limit reached",
+      body: "This ticket has a launch request and will start automatically when a running session finishes and a WIP slot is free.",
+    };
+  }
+  return {
+    title: "Queued",
+    body: "This ticket has a launch request but no agent session exists yet. Move it to Backlog to cancel, or to In Progress to retry launch now.",
+  };
+}
+
 function TicketPanel(props: AnyObj) {
   const {
     ticket, columns, engines, byId, resolveRole, resolveEngine, boardDefaultEngine, codexModel,
-    codexEffort, isSessionRunning, isSessionPaused, moveTicket, close, refresh, showToast,
+    codexEffort, isSessionRunning, isQueued, isSessionPaused, moveTicket, close, refresh, showToast,
     stopSession, resumeSession,
   } = props;
   const [log, setLog] = useState("loading...");
@@ -739,6 +761,8 @@ function TicketPanel(props: AnyObj) {
   const ac = Array.isArray(ticket.acceptance_criteria) ? ticket.acceptance_criteria : [];
   const latestNote = Array.isArray(ticket.notes) && ticket.notes.length ? ticket.notes[ticket.notes.length - 1] : null;
   const running = isSessionRunning(ticket.id);
+  const queued = isQueued(ticket);
+  const queuedInfo = queued ? queuedExplanation(ticket) : null;
   const paused = isSessionPaused(ticket);
 
   return (
@@ -798,6 +822,14 @@ function TicketPanel(props: AnyObj) {
               <h3>Session paused - usage limit hit</h3>
               <p className="panel-hint">The worktree and branch are preserved. Resume to continue from exactly where the session left off.</p>
               <button className="resume-btn" type="button" onClick={() => resumeSession(ticket.id)}>▶ Resume session</button>
+            </div>
+          ) : null}
+
+          {queuedInfo ? (
+            <div className="panel-section queued-section">
+              <h3>{queuedInfo.title}</h3>
+              <p className="panel-hint">{queuedInfo.body}</p>
+              {ticket.queued_detail ? <p className="panel-desc">{ticket.queued_detail}</p> : null}
             </div>
           ) : null}
 
@@ -1163,7 +1195,7 @@ function ProjectsView({ active, refreshBoard, setView }: { active: boolean; refr
       workPrompt: "scripts/work-ticket-prompt.md",
       fixCiPrompt: "scripts/fix-ci-prompt.md",
       fixConflictPrompt: "scripts/fix-conflict-prompt.md",
-      statuses: ["triage", "backlog", "in_progress", "blocked", "human_review", "done"],
+      statuses: ["triage", "backlog", "queued", "in_progress", "blocked", "human_review", "done"],
       repos: { workspace: { path: ".", baseBranch: "main", worktree: false, role: "cross-repo" } },
       engines: { default: "claude", allowed: ["claude", "codex"] },
     };
@@ -1236,7 +1268,7 @@ function ProjectsView({ active, refreshBoard, setView }: { active: boolean; refr
   }
 
   const repos = selected.repos || { workspace: { path: ".", baseBranch: "main", worktree: false, role: "cross-repo" } };
-  const statuses = Array.isArray(selected.statuses) ? selected.statuses.join(", ") : "triage, backlog, in_progress, blocked, human_review, done";
+  const statuses = Array.isArray(selected.statuses) ? selected.statuses.join(", ") : "triage, backlog, queued, in_progress, blocked, human_review, done";
 
   return (
     <main className="projects">

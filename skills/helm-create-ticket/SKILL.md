@@ -18,6 +18,21 @@ node bin/new-ticket.mjs --title "<title>" --repo <repo> --priority P2
 4. Edit the generated JSON file to add meaningful details.
 5. Run `npm run validate:tickets`.
 
+## Notes / Import Mode
+
+When converting pasted notes, roadmap text, TODOs, issue summaries, or several
+rough ideas:
+
+1. Group the notes into the smallest useful set of tickets.
+2. Preview the proposed ticket titles, target repo, priority, and why each ticket
+   exists.
+3. If the user's prompt explicitly asks to create tickets now, write them after
+   the preview in the same turn. Otherwise ask for confirmation before writing.
+4. Keep imported/discovered tickets in `triage` unless the user explicitly says
+   they are ready for execution.
+5. Add the original note, file path, issue URL, branch, or PR URL to
+   `context_refs` when available.
+
 ## Ticket Quality Bar
 
 Every ticket should include:
