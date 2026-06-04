@@ -11,7 +11,7 @@ Work exactly one ticket. Do not expand scope unless needed to satisfy acceptance
 
 ## Workflow
 
-1. Read `devboard.config.json`, the target ticket JSON, and all listed `context_refs`.
+1. Read `helmmate.config.json`, the target ticket JSON, and all listed `context_refs`.
 2. Confirm dependencies in `depends_on` are done. If not, add a note and stop.
 3. Inspect the repo state with `git status --short`. Do not overwrite unrelated user changes.
 4. Use the ticket branch if present; otherwise create `ticket/<id>-<short-title>`.

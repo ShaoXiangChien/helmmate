@@ -90,7 +90,7 @@
       if (res.ok) {
         const refreshBtn = $("#refresh");
         if (refreshBtn) refreshBtn.click();
-        if (window.devboardSetView) window.devboardSetView("board");
+        if (window.helmmateSetView) window.helmmateSetView("board");
       }
     } finally {
       await refresh();

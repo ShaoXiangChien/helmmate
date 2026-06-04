@@ -11,7 +11,7 @@ Capture durable learning without editing curated project memory directly.
 
 ## Workflow
 
-1. Read `devboard.config.json` and resolve `memoryQueueDir`.
+1. Read `helmmate.config.json` and resolve `memoryQueueDir`.
 2. Review the session changes, ticket notes, verification commands, and any newly discovered conventions.
 3. Write a proposal markdown file in `memoryQueueDir` named after the ticket id or a safe slug.
 4. Include only durable information:

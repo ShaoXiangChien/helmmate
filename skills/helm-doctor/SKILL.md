@@ -13,7 +13,7 @@ Doctor answers one question: "Is HelmMate safe and ready for this repo?"
 
 ## Workflow
 
-1. Read `devboard.config.json`.
+1. Read `helmmate.config.json`.
 2. Run lightweight checks first when available:
 
 ```bash

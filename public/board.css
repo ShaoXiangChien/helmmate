@@ -64,11 +64,11 @@ body::before {
 .topbar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: stretch;
   position: sticky;
   top: 0;
   z-index: 30;
-  padding: 16px 28px;
+  padding: 12px 18px;
   background: rgba(3, 8, 18, 0.88);
   backdrop-filter: blur(18px);
   border-bottom: 1px solid var(--line);
@@ -90,7 +90,88 @@ body::before {
   text-shadow: 0 0 12px rgba(76, 201, 255, 0.4);
 }
 
-.topbar-controls { display: flex; align-items: center; gap: 14px; }
+.topbar-strip,
+.topbar-controls {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.topbar-group {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px;
+  border: 1px solid rgba(76, 201, 255, 0.12);
+  border-radius: var(--radius);
+  background: rgba(6, 17, 33, 0.58);
+}
+.topbar-group--status { flex: 1 1 auto; justify-content: flex-start; }
+.topbar-group--actions,
+.topbar-group--launch { flex: none; }
+.topbar-group--actions .ghost-btn,
+.topbar-group--launch .ghost-btn,
+.topbar-group--launch .arm {
+  min-width: 112px;
+}
+
+.control-chip {
+  min-height: 34px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  background: rgba(3, 8, 18, 0.45);
+  color: var(--ink-soft);
+  font-family: var(--mono);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.control-chip strong {
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+.control-chip--button {
+  cursor: pointer;
+}
+.control-chip--button:hover {
+  color: var(--ink);
+  border-color: var(--line-strong);
+  background: rgba(76, 201, 255, 0.08);
+}
+.control-chip--on {
+  color: var(--accent-2);
+  border-color: rgba(23, 241, 255, 0.42);
+  background: var(--accent-soft);
+}
+.control-chip--bad {
+  color: var(--disarmed);
+  border-color: rgba(255, 95, 122, 0.3);
+  background: var(--disarmed-soft);
+}
+.control-chip--muted { color: var(--ink-faint); }
+.control-label {
+  color: currentColor;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.control-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--ink-faint);
+  box-shadow: 0 0 10px rgba(85, 117, 139, 0.3);
+}
+.control-dot--live {
+  background: var(--accent-2);
+  box-shadow: 0 0 12px rgba(23, 241, 255, 0.58);
+}
 
 .wip {
   font-size: 13px; color: var(--ink-soft);
@@ -132,6 +213,9 @@ body::before {
   text-transform: uppercase;
   transition: border-color 0.15s, color 0.15s, box-shadow 0.15s, background 0.15s;
 }
+.ghost-btn--compact {
+  padding-inline: 11px;
+}
 .ghost-btn:hover { background: var(--surface-2); border-color: var(--line-strong); color: var(--ink); box-shadow: var(--glow); }
 .ghost-btn:focus-visible,
 .arm:focus-visible,
@@ -163,6 +247,13 @@ body::before {
   overflow-x: auto;
   position: relative;
   z-index: 1;
+}
+.board--empty {
+  min-height: calc(100vh - 78px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: visible;
 }
 
 .column {
@@ -213,15 +304,12 @@ body::before {
 }
 
 .board-empty {
-  grid-column: 1 / -1;
-  justify-self: start;
-  width: min(100%, calc(100vw - 264px));
-  max-width: 1120px;
+  width: min(100%, 860px);
   display: grid;
-  grid-template-columns: minmax(280px, 1fr) minmax(280px, 420px);
-  gap: 20px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 18px;
   align-items: center;
-  padding: 22px;
+  padding: 28px;
   border: 1px solid var(--line-strong);
   border-radius: var(--radius);
   background:
@@ -241,20 +329,21 @@ body::before {
 .board-empty h1 {
   margin: 0;
   color: var(--ink);
-  font-size: 24px;
-  line-height: 1.2;
+  font-size: 30px;
+  line-height: 1.12;
   font-weight: 700;
+  letter-spacing: 0;
 }
 .board-empty p {
-  max-width: 620px;
+  max-width: 68ch;
   margin: 10px 0 0;
   color: var(--ink-soft);
   font-size: 13.5px;
   line-height: 1.55;
 }
 .board-empty-actions {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  display: flex;
+  flex-wrap: wrap;
   gap: 10px;
 }
 .board-empty-btn {
@@ -461,7 +550,10 @@ body::before {
   background: rgba(47, 255, 208, 0.08);
 }
 /* topbar default-engine toggle: tinted purple when defaulting to Codex */
-.engine-toggle .engine-label { font-weight: 600; }
+.engine-toggle .engine-label {
+  margin-left: 6px;
+  font-weight: 700;
+}
 .engine-toggle--codex {
   color: #b48cff;
   border-color: rgba(180, 140, 255, 0.5);
@@ -855,7 +947,24 @@ body::before {
 
 @media (max-width: 720px) {
   .topbar { align-items: flex-start; flex-direction: column; gap: 14px; }
-  .topbar-controls { flex-wrap: wrap; gap: 10px; }
+  .topbar-strip,
+  .topbar-controls {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .topbar-group {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+  .topbar-group--actions,
+  .topbar-group--launch {
+    justify-content: flex-start;
+  }
+  .control-chip {
+    flex: 1 1 130px;
+    justify-content: space-between;
+  }
   .board { grid-template-columns: 1fr; padding: 18px 16px 36px; }
   .board-empty { padding: 18px; width: 100%; }
   .board-empty-actions { grid-template-columns: 1fr; }
@@ -871,6 +980,7 @@ body::before {
   /* 44px min tap targets across touch chrome. */
   .arm,
   .ghost-btn,
+  .control-chip,
   .primary-btn,
   .stop-btn,
   .resume-btn,

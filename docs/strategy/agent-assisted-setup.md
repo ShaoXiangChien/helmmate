@@ -28,7 +28,7 @@ Inputs:
 Agent work:
 
 - inspect the repo;
-- create or update `devboard.config.json`;
+- create or update `helmmate.config.json`;
 - add `projects.<id>`;
 - keep unrelated projects intact;
 - initialize `tickets/`, `.agents/`, and `memory/sync-queue/`;

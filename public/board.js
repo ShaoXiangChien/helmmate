@@ -675,7 +675,7 @@ function wireBoardEmptyActions() {
     btn.addEventListener("click", () => {
       const action = btn.getAttribute("data-board-action");
       if (action === "projects") {
-        if (window.devboardSetView) window.devboardSetView("projects");
+        if (window.helmmateSetView) window.helmmateSetView("projects");
         return;
       }
       if (action === "create-ticket") {

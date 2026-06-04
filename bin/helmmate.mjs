@@ -8,10 +8,10 @@ const rest = process.argv.slice(3);
 
 function usage() {
   console.log(`Usage:
-  dev-board init
-  dev-board new-ticket --title "Add auth smoke test"
-  dev-board validate [--fix]
-  dev-board start
+  helmmate init
+  helmmate new-ticket --title "Add auth smoke test"
+  helmmate validate [--fix]
+  helmmate start
 `);
 }
 

@@ -1,0 +1,38 @@
+{
+  "defaultPort": 4317,
+  "host": "127.0.0.1",
+  "activeProject": "example",
+  "projects": {
+    "example": {
+      "name": "Example Project",
+      "workspaceDir": "/absolute/path/to/your/project",
+      "ticketsDir": "tickets",
+      "ticketIdPrefix": "EX",
+      "repos": {
+        "workspace": {
+          "path": ".",
+          "baseBranch": "main",
+          "worktree": false,
+          "role": "cross-repo"
+        }
+      },
+      "statuses": ["triage", "backlog", "queued", "in_progress", "blocked", "human_review", "done"],
+      "agentDir": ".agents",
+      "memoryQueueDir": "memory/sync-queue",
+      "workPrompt": "scripts/work-ticket-prompt.md",
+      "fixCiPrompt": "scripts/fix-ci-prompt.md",
+      "fixConflictPrompt": "scripts/fix-conflict-prompt.md",
+      "engines": {
+        "default": "claude",
+        "allowed": ["claude", "codex"]
+      },
+      "roles": {
+        "cross-repo": { "model": "sonnet" },
+        "architect": { "model": "opus" }
+      },
+      "roleByRepo": {
+        "workspace": "cross-repo"
+      }
+    }
+  }
+}

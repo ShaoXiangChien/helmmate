@@ -53,4 +53,4 @@ other projects to adopt.
   naming, and engine arg construction.
 - Integration-test ticket movement and index rewrites in temp directories.
 - Add GitHub Actions for validation and tests.
-- Publish as an npm package with a `dev-board` binary.
+- Publish as an npm package with a `helmmate` binary.

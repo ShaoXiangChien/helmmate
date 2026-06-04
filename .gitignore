@@ -1,7 +1,9 @@
 node_modules/
+dist/
 .claude/
 .codex/
 .agents/
+.impeccable/
 logs/
 worktrees/
 tickets/
@@ -10,5 +12,6 @@ memory/sync-queue/applied/
 .state.json
 .runs.json
 .official-usage-cache.json
+helmmate.config.json
 *.local.json
 .DS_Store

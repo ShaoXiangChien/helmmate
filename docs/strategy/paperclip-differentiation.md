@@ -154,7 +154,7 @@ Secondary:
 
 ### Near-term
 
-- Rename product surfaces to HelmMate while keeping `dev-board` CLI/package as the
+- Rename product surfaces to HelmMate while keeping `helmmate` CLI/package as the
   migration name.
 - Improve onboarding around "make your first agent-ready ticket."
 - Add a Doctor page for setup, missing CLIs, bad config, stale worktrees, and

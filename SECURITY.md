@@ -15,7 +15,7 @@ edit files, run commands, create branches, push commits, and open pull requests.
 ## Operational Guidance
 
 - Do not expose the server to the public internet.
-- Review `devboard.config.json` before arming the board.
+- Review `helmmate.config.json` before arming the board.
 - Treat agent engines as privileged local processes.
 - Keep OAuth credentials, usage caches, logs, run ledgers, local state, tickets,
   and worktrees out of git unless you intentionally want to publish them.

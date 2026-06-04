@@ -4,7 +4,7 @@ import { REPO_KEYS, TICKETS_DIR } from "../lib/paths.js";
 
 function usage() {
   console.log(`Usage:
-  dev-board new-ticket --title "Add auth smoke test" [--repo workspace] [--priority P1]
+  helmmate new-ticket --title "Add auth smoke test" [--repo workspace] [--priority P1]
   new-ticket --title "Add auth smoke test" [--id DB-001] [--status triage]
 `);
 }

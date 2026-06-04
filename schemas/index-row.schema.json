@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://example.com/dev-board/index-row.schema.json",
+  "$id": "https://example.com/helmmate/index-row.schema.json",
   "title": "Dev Board Ticket Index Row",
   "type": "object",
   "required": ["id", "title", "status", "priority", "repo", "depends_on"],

@@ -7,7 +7,7 @@ description: Turn a rough idea, bug report, user request, open loop, or implemen
 
 ## Workflow
 
-1. Read `devboard.config.json` to identify `ticketsDir`, `ticketIdPrefix`, configured repos, and statuses.
+1. Read `helmmate.config.json` to identify `ticketsDir`, `ticketIdPrefix`, configured repos, and statuses.
 2. Clarify only if the target repo or desired outcome is ambiguous enough to create bad work. Otherwise choose the configured `workspace` repo or first repo.
 3. Create the ticket through the CLI when possible:
 

@@ -296,7 +296,7 @@ What the setup skill should inspect:
 - likely test command;
 - repo name;
 - dirty working tree;
-- existing `devboard.config.json`;
+- existing `helmmate.config.json`;
 - existing `tickets/`, `.agents/`, `memory/sync-queue/`;
 - prompt files present/missing.
 

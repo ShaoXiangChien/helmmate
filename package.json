@@ -1,16 +1,16 @@
 {
-  "name": "dev-board",
+  "name": "helmmate",
   "version": "0.1.0",
   "description": "HelmMate: local kanban dashboard and review-gated agent launcher for JSON ticket queues",
   "type": "module",
   "private": false,
   "bin": {
-    "dev-board": "bin/dev-board.mjs",
+    "helmmate": "bin/helmmate.mjs",
     "new-ticket": "bin/new-ticket.mjs",
     "validate-tickets": "bin/validate-tickets.mjs"
   },
   "scripts": {
-    "init": "node bin/dev-board.mjs init",
+    "init": "node bin/helmmate.mjs init",
     "dev": "vite --host 127.0.0.1",
     "build": "vite build",
     "start": "node server.js",

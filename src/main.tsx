@@ -7,7 +7,8 @@ import "../public/agents.css";
 
 type AnyObj = Record<string, any>;
 
-const TAB_KEY = "devboard.activeTab";
+const TAB_KEY = "helmmate.activeTab";
+const SIDEBAR_KEY = "helmmate.sidebarCollapsed";
 const VIEWS = ["home", "board", "agents", "projects"] as const;
 type View = (typeof VIEWS)[number];
 
@@ -273,19 +274,24 @@ function MetricRow({ label, children }: { label: string; children: React.ReactNo
   );
 }
 
+function ShellIcon({ view }: { view: View }) {
+  return <span className={`shell-icon shell-icon--${view}`} aria-hidden="true" />;
+}
+
 function setupRepoRows(setup: AnyObj | null) {
   if (!setup) return [];
   if (Array.isArray(setup.repoStatus) && setup.repoStatus.length) return setup.repoStatus;
   return (setup.repos || []).map((key: string) => ({ key, exists: null, path: "" }));
 }
 
-function onboardingComplete(setup: AnyObj | null, ticketCount = 0) {
+function onboardingComplete(setup: AnyObj | null) {
   if (!setup) return false;
   const rows = setupRepoRows(setup);
   const hasRepos = Array.isArray(setup.repos) && setup.repos.length > 0;
   const reposReachable = rows.length ? rows.every((repo: AnyObj) => repo.exists !== false) : hasRepos;
   const restart = !!setup.requiresRestart || !!(setup.configuredActiveProject && setup.runtimeActiveProject && setup.configuredActiveProject !== setup.runtimeActiveProject);
   return Boolean(
+    setup.projectConfigured &&
     setup.configPath &&
     setup.ticketsDirExists &&
     setup.indexExists &&
@@ -293,8 +299,7 @@ function onboardingComplete(setup: AnyObj | null, ticketCount = 0) {
     setup.memoryQueueDirExists !== false &&
     hasRepos &&
     reposReachable &&
-    !restart &&
-    (Number(setup.ticketCount || 0) > 0 || ticketCount > 0)
+    !restart
   );
 }
 
@@ -305,6 +310,27 @@ function slugProjectId(value: string) {
     .replace(/[^a-z0-9._-]+/g, "-")
     .replace(/^-+|-+$/g, "");
   return slug || "default";
+}
+
+function leafName(value: string) {
+  return String(value || "")
+    .trim()
+    .replace(/\/+$/g, "")
+    .split("/")
+    .filter(Boolean)
+    .pop() || "";
+}
+
+function inferTicketPrefix(value: string) {
+  const words = String(value || "")
+    .trim()
+    .replace(/[^a-zA-Z0-9]+/g, " ")
+    .split(/\s+/)
+    .filter(Boolean);
+  const prefix = words.length > 1
+    ? words.map((word) => word[0]).join("")
+    : (words[0] || "DB").slice(0, 3);
+  return (prefix || "DB").toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 5) || "DB";
 }
 
 function projectPayload(input: AnyObj) {
@@ -353,6 +379,13 @@ function App() {
   const [tickets, setTickets] = useState<AnyObj[]>([]);
   const [board, setBoard] = useState<AnyObj>({ armed: false, autopilot: false, wipLimit: 2, running: [], defaultEngine: "claude" });
   const [readyOnly, setReadyOnly] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    try {
+      return localStorage.getItem(SIDEBAR_KEY) === "1";
+    } catch {
+      return false;
+    }
+  });
   const [toast, setToastState] = useState("");
   const [openTicketId, setOpenTicketId] = useState<string | null>(null);
   const [creatingTicket, setCreatingTicket] = useState(false);
@@ -412,6 +445,14 @@ function App() {
       /* ignore */
     }
   }, [view]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(SIDEBAR_KEY, sidebarCollapsed ? "1" : "0");
+    } catch {
+      /* ignore */
+    }
+  }, [sidebarCollapsed]);
 
   const boardDefaultEngine = useCallback(() => (engines.includes(board.defaultEngine) ? board.defaultEngine : "claude"), [engines, board.defaultEngine]);
   const resolveEngine = useCallback((t: AnyObj) => (t && engines.includes(t.engine) ? t.engine : boardDefaultEngine()), [engines, boardDefaultEngine]);
@@ -502,6 +543,18 @@ function App() {
     }
   }, [config, showToast]);
 
+  const copyFirstTicketPrompt = useCallback(async () => {
+    try {
+      const res = await fetch("/api/setup/first-ticket-prompt", { method: "POST" });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `Prompt failed (${res.status})`);
+      await navigator.clipboard.writeText(data.prompt || "");
+      showToast("First ticket prompt copied");
+    } catch (err: any) {
+      showToast(`Could not copy first ticket prompt: ${err.message}`);
+    }
+  }, [showToast]);
+
   const stopSession = useCallback(async (id: string) => {
     if (!confirm(`Stop the running session for ${id}? This kills the agent process and reverts the ticket to Backlog.`)) return;
     try {
@@ -552,7 +605,11 @@ function App() {
   }, []);
 
   const openTicket = openTicketId ? byId.get(openTicketId) : null;
-  const completeOnboarding = onboardingComplete(setup, tickets.length);
+  const completeOnboarding = onboardingComplete(setup);
+  const readyCount = tickets.filter((ticket) => isReady(ticket)).length;
+  const queuedCount = tickets.filter((ticket) => isQueued(ticket)).length;
+  const runningCount = (board.running || []).length;
+  const blockedCount = tickets.filter((ticket) => isBlocked(ticket)).length;
 
   if (!completeOnboarding) {
     return (
@@ -572,15 +629,27 @@ function App() {
 
   return (
     <>
-      <div className="app-shell">
-        <aside className="sidebar">
-          <div className="brand">
-            <span className="brand-mark" />
-            <span className="brand-name">HelmMate</span>
+      <div className={`app-shell${sidebarCollapsed ? " app-shell--sidebar-collapsed" : ""}`}>
+        <aside className="sidebar" aria-label="Primary navigation">
+          <div className="sidebar-head">
+            <div className="brand">
+              <span className="brand-mark" />
+              <span className="brand-name">HelmMate</span>
+            </div>
+            <button
+              className="sidebar-toggle"
+              type="button"
+              aria-label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"}
+              aria-pressed={sidebarCollapsed}
+              onClick={() => setSidebarCollapsed((value) => !value)}
+            >
+              <span className="sidebar-toggle-icon" aria-hidden="true" />
+            </button>
           </div>
           <nav className="side-nav" role="tablist" aria-label="Views">
             {VIEWS.map((v) => (
-              <button key={v} className={`side-tab${view === v ? " side-tab--active" : ""}`} type="button" role="tab" aria-selected={view === v} onClick={() => setView(v)}>
+              <button key={v} className={`side-tab${view === v ? " side-tab--active" : ""}`} type="button" role="tab" aria-selected={view === v} aria-label={titleForStatus(v)} title={titleForStatus(v)} onClick={() => setView(v)}>
+                <ShellIcon view={v} />
                 <span className="side-tab-label">{titleForStatus(v)}</span>
               </button>
             ))}
@@ -589,19 +658,44 @@ function App() {
 
         <div className="app-main">
           <header className="topbar">
-            <div className="topbar-controls">
-              <div className="wip">WIP &middot; <span>{(board.running || []).length}</span>/<span>{board.wipLimit || 2}</span></div>
-              <button className={`ghost-btn${readyOnly ? " ghost-btn--on" : ""}`} type="button" aria-pressed={readyOnly} title="Show ready tickets only" onClick={() => setReadyOnly((v) => !v)}>Ready</button>
-              <button className="ghost-btn" type="button" title="Create a reviewed ticket from the board" onClick={createBoardStarterTicket}>Create ticket</button>
-              <button className="ghost-btn" type="button" title="Copy an agent prompt that imports pasted notes into triage tickets" onClick={openImportNotes}>Import notes</button>
-              <button className={`arm ${board.armed ? "arm--on" : "arm--off"}`} type="button" aria-pressed={!!board.armed} onClick={() => setArmed(!board.armed)}>
-                <span className="arm-dot" />
-                <span className="arm-label">{board.armed ? "Armed" : "Disarmed"}</span>
-              </button>
-              <button className={`ghost-btn engine-toggle${boardDefaultEngine() === "codex" ? " engine-toggle--codex" : ""}`} type="button" title="Default engine for new launches" onClick={setDefaultEngine}>
-                Engine: <span className="engine-label">{titleForStatus(boardDefaultEngine())}</span>
-              </button>
-              <button className="ghost-btn" type="button" title="Refresh board" onClick={refresh}>Refresh</button>
+            <div className="topbar-strip" aria-label="Launch controls">
+              <div className="topbar-group topbar-group--status" aria-label="Board state">
+                <div className="control-chip control-chip--metric" title="Current running sessions against the WIP limit">
+                  <span className={`control-dot${runningCount ? " control-dot--live" : ""}`} />
+                  <span className="control-label">WIP</span>
+                  <strong>{runningCount}/{board.wipLimit || 2}</strong>
+                </div>
+                <button className={`control-chip control-chip--button${readyOnly ? " control-chip--on" : ""}`} type="button" aria-pressed={readyOnly} title="Show ready backlog tickets only" onClick={() => setReadyOnly((v) => !v)}>
+                  <span className="control-label">Ready</span>
+                  <strong>{readyCount}</strong>
+                </button>
+                <div className="control-chip control-chip--metric control-chip--muted" title="Queued launch requests waiting for permission, WIP, or scheduler">
+                  <span className="control-label">Queued</span>
+                  <strong>{queuedCount}</strong>
+                </div>
+                {blockedCount ? (
+                  <div className="control-chip control-chip--metric control-chip--bad" title="Tickets blocked by status or dependencies">
+                    <span className="control-label">Blocked</span>
+                    <strong>{blockedCount}</strong>
+                  </div>
+                ) : null}
+              </div>
+
+              <div className="topbar-group topbar-group--actions" aria-label="Ticket actions">
+                <button className="ghost-btn" type="button" title="Create a reviewed ticket from the board" onClick={createBoardStarterTicket}>Create ticket</button>
+                <button className="ghost-btn" type="button" title="Copy an agent prompt that imports pasted notes into triage tickets" onClick={openImportNotes}>Import notes</button>
+                <button className="ghost-btn ghost-btn--compact" type="button" title="Refresh board" onClick={refresh}>Refresh</button>
+              </div>
+
+              <div className="topbar-group topbar-group--launch" aria-label="Launch safety">
+                <button className={`ghost-btn engine-toggle${boardDefaultEngine() === "codex" ? " engine-toggle--codex" : ""}`} type="button" title="Default engine for new launches" onClick={setDefaultEngine}>
+                  Engine <span className="engine-label">{titleForStatus(boardDefaultEngine())}</span>
+                </button>
+                <button className={`arm ${board.armed ? "arm--on" : "arm--off"}`} type="button" aria-pressed={!!board.armed} onClick={() => setArmed(!board.armed)}>
+                  <span className="arm-dot" />
+                  <span className="arm-label">{board.armed ? "Armed" : "Disarmed"}</span>
+                </button>
+              </div>
             </div>
           </header>
 
@@ -629,9 +723,10 @@ function App() {
               stopSession={stopSession}
               resumeSession={resumeSession}
               setView={setView}
-              createBoardStarterTicket={createBoardStarterTicket}
               openImportNotes={openImportNotes}
               copyBoardSetupPrompt={copyBoardSetupPrompt}
+              copyFirstTicketPrompt={copyFirstTicketPrompt}
+              refreshBoard={refresh}
               showToast={showToast}
             />
             {openTicket ? (
@@ -703,21 +798,27 @@ function BoardView(props: AnyObj) {
   const {
     tickets, columns, readyOnly, isReady, isBlocked, isSessionRunning, isQueued, isSessionPaused,
     resolveRole, roleModel, resolveEngine, boardDefaultEngine, codexModel, codexEffort,
-    moveTicket, openTicket, stopSession, resumeSession, setView, createBoardStarterTicket, openImportNotes,
-    copyBoardSetupPrompt, showToast,
+    moveTicket, openTicket, stopSession, resumeSession, setView, openImportNotes,
+    copyBoardSetupPrompt, copyFirstTicketPrompt, refreshBoard, showToast,
   } = props;
+
+  if (tickets.length === 0) {
+    return (
+      <main className="board board--empty">
+        <BoardEmptyState
+          setView={setView}
+          openImportNotes={openImportNotes}
+          copyBoardSetupPrompt={copyBoardSetupPrompt}
+          copyFirstTicketPrompt={copyFirstTicketPrompt}
+          refreshBoard={refreshBoard}
+          showToast={showToast}
+        />
+      </main>
+    );
+  }
 
   return (
     <main className="board">
-      {tickets.length === 0 ? (
-        <BoardEmptyState
-          setView={setView}
-          createBoardStarterTicket={createBoardStarterTicket}
-          openImportNotes={openImportNotes}
-          copyBoardSetupPrompt={copyBoardSetupPrompt}
-          showToast={showToast}
-        />
-      ) : null}
       {columns.map((col: AnyObj) => {
         const items = tickets
           .filter((t: AnyObj) => (t.status || "backlog") === col.status)
@@ -752,20 +853,19 @@ function BoardView(props: AnyObj) {
   );
 }
 
-function BoardEmptyState({ setView, createBoardStarterTicket, openImportNotes, copyBoardSetupPrompt }: AnyObj) {
+function BoardEmptyState({ openImportNotes, copyBoardSetupPrompt, copyFirstTicketPrompt, refreshBoard }: AnyObj) {
   return (
     <section className="board-empty" aria-label="Board empty state">
       <div className="board-empty-main">
         <span className="board-empty-kicker">No tickets yet</span>
-        <h1>Start with a reviewed first ticket.</h1>
-        <p>HelmMate is disarmed by default. Connect an existing repo, create a small starter ticket, or copy the setup prompt before any agent work can run.</p>
+        <h1>Ask your agent to create the first ticket.</h1>
+        <p>Open your coding agent in the project folder, paste the HelmMate ticket prompt, and let it create a reviewed triage ticket with acceptance criteria. Come back here and refresh when it finishes.</p>
       </div>
       <div className="board-empty-actions">
-        <button className="board-empty-btn board-empty-btn--primary" type="button" onClick={() => setView("projects")}>Connect existing repo</button>
-        <button className="board-empty-btn" type="button" onClick={createBoardStarterTicket}>Create ticket</button>
-        <button className="board-empty-btn" type="button" onClick={openImportNotes}>Import from notes</button>
-        <button className="board-empty-btn" type="button" onClick={copyBoardSetupPrompt}>Copy setup prompt</button>
-        <button className="board-empty-btn" type="button" onClick={() => setView("projects")}>Run doctor</button>
+        <button className="board-empty-btn board-empty-btn--primary" type="button" onClick={copyFirstTicketPrompt}>Copy first ticket prompt</button>
+        <button className="board-empty-btn" type="button" onClick={openImportNotes}>Use pasted notes</button>
+        <button className="board-empty-btn" type="button" onClick={refreshBoard}>I made tickets. Refresh</button>
+        <button className="board-empty-btn" type="button" onClick={copyBoardSetupPrompt}>Copy project setup prompt</button>
       </div>
     </section>
   );
@@ -1586,7 +1686,7 @@ function HomeView({ active, setView }: { active: boolean; setView: (view: View) 
   const repoRows = Array.isArray(setup?.repoStatus) && setup.repoStatus.length
     ? setup.repoStatus
     : Array.from(validRepos).map((key) => ({ key, exists: null, path: "" }));
-  const projectConfigured = !!setup?.configPath && (validRepos.size > 0 || !!config?.activeProject || !!setup?.activeProject);
+  const projectConfigured = !!setup?.projectConfigured;
   const reposReady = validRepos.size > 0 && repoRows.every((repo: AnyObj) => repo.exists !== false);
   const supportFoldersReady = setup?.agentDirExists !== false && setup?.memoryQueueDirExists !== false;
   const restart = !!setup?.requiresRestart || !!(setup?.configuredActiveProject && setup?.runtimeActiveProject && setup.configuredActiveProject !== setup.runtimeActiveProject);
@@ -1752,10 +1852,10 @@ function HomeView({ active, setView }: { active: boolean; setView: (view: View) 
   function ReadinessHome() {
     const copy: AnyObj = {
       "no-project": ["first run", "Connect a project", "Choose or create a project configuration before HelmMate can prepare tickets."],
-      "folders-missing": ["setup", "Prepare local folders", "Create the ticket index and support folders, then confirm repos are reachable."],
-      "no-tickets": ["ready", "Create a first ticket", "The project is ready for tickets. Start with one reviewed, small task."],
-      "none-launch-ready": ["needs review", "Review tickets", "Tickets exist, but none currently satisfy the launch checks."],
-      "launch-ready": ["launch-ready", "Ready to launch", "At least one ticket can launch once the board is armed and dispatch is enabled."],
+      "folders-missing": ["setup", "Clear setup checks", "Create support folders, confirm the active project, and make sure repos are reachable."],
+      "no-tickets": ["ready", "Create a first ticket", "The workspace is connected. Start with one reviewed, small task."],
+      "none-launch-ready": ["needs review", "Make one ticket launch-ready", "Tickets exist, but none currently pass repo, dependency, status, and acceptance checks."],
+      "launch-ready": ["launch-ready", "Ready for controlled dispatch", "At least one ticket can launch after you choose the launch safety posture."],
     };
     const [kicker, title, detail] = copy[stage] || copy["no-project"];
     const repoDetail = repoRows.length
@@ -1766,6 +1866,14 @@ function HomeView({ active, setView }: { active: boolean; setView: (view: View) 
         <span className="projects-step-dot" /><span className="projects-step-main">{label}</span><span className="projects-step-detail">{value}</span>
       </li>
     );
+    const blockers = [
+      !projectConfigured ? "Project config missing" : "",
+      restart ? "Server restart required" : "",
+      !setup?.ticketsDirExists || !setup?.indexExists ? "Ticket index missing" : "",
+      !supportFoldersReady ? "Agent or memory folder missing" : "",
+      !reposReady ? "Repo mapping needs attention" : "",
+      ticketList.length && !launchReady.length ? "No launch-ready ticket" : "",
+    ].filter(Boolean);
     let lead = "Open Projects to connect a workspace.";
     let actions: React.ReactNode = <button className="projects-btn projects-btn--primary" type="button" onClick={() => setView("projects")}>Open Projects</button>;
     if (stage === "folders-missing") {
@@ -1788,13 +1896,13 @@ function HomeView({ active, setView }: { active: boolean; setView: (view: View) 
       <>
         <BreakerBanner />
         <div className="home-ready-grid">
-          <HomeCard title="Home Readiness">
+          <HomeCard title="Operational Brief" sub={blockers.length ? `${blockers.length} blocker${blockers.length === 1 ? "" : "s"}` : "clear"}>
             <div className="home-ready-hero"><span className="home-ready-kicker">{kicker}</span><h2>{title}</h2><p>{detail}</p></div>
             <div className="home-ready-stats">
-              <MetricRow label="project">{setup?.activeProject || config?.activeProject || "none"}</MetricRow>
-              <MetricRow label="tickets">{fmtInt(ticketList.length)}</MetricRow>
-              <MetricRow label="launch-ready">{fmtInt(launchReady.length)}</MetricRow>
-              <MetricRow label="dispatch">{!launchReady.length ? "waiting" : board?.armed && scheduler?.autopilot ? "enabled" : board?.armed ? "arm on" : "disarmed"}</MetricRow>
+              <MetricRow label="workspace">{setup?.activeProject || config?.activeProject || "none"}</MetricRow>
+              <MetricRow label="ticket queue">{fmtInt(ticketList.length)} total · {fmtInt(launchReady.length)} ready</MetricRow>
+              <MetricRow label="launch safety">{board?.armed ? "armed" : "disarmed"}</MetricRow>
+              <MetricRow label="dispatcher">{scheduler?.autopilot ? "autopilot on" : "manual"}</MetricRow>
             </div>
           </HomeCard>
           <HomeCard title="Next Actions">
@@ -1802,18 +1910,14 @@ function HomeView({ active, setView }: { active: boolean; setView: (view: View) 
             <div className="projects-actions">{actions}</div>
             <div className="home-note home-dim">Home stays in readiness mode until a run is active or recorded.</div>
           </HomeCard>
-          <HomeCard title="Readiness Checklist" sub={stage === "launch-ready" ? `${launchReady.length} ready` : "next check"}>
+          <HomeCard title="Readiness Checks" sub={stage === "launch-ready" ? `${launchReady.length} ready` : "next check"}>
             <ul className="projects-steps">
-              {step(projectConfigured, "Project config", setup?.configPath || "open Projects to configure")}
-              {step(!restart, "Active project", restart ? setup?.restartReason || "restart needed to load selected project" : setup?.runtimeActiveProject || setup?.activeProject || "loaded", restart ? "warn" : "")}
-              {step(!!setup?.ticketsDirExists, "Tickets directory", setup?.ticketsDir || "not configured")}
-              {step(!!setup?.indexExists, "Ticket index", setup?.indexExists ? "_index.json exists" : "missing or will be created")}
-              {step(setup?.agentDirExists !== false, "Agent folder", setup?.agentDir || "not configured")}
-              {step(setup?.memoryQueueDirExists !== false, "Memory queue", setup?.memoryQueueDir || "not configured")}
-              {step(reposReady, "Configured repos", repoDetail)}
-              {step(ticketList.length > 0, "Tickets", ticketList.length ? `${ticketList.length} found` : "none yet")}
-              {step(launchReady.length > 0, "Launch-ready tickets", launchReady.length ? launchReady.slice(0, 3).map((t) => t.id).join(", ") : ticketList.length ? "move a reviewed ticket to triage/backlog with deps done" : "create a starter ticket")}
-              {step(board?.armed === false, "Board starts safe", board?.armed === true ? "armed" : board?.armed === false ? "disarmed" : "unknown", board?.armed === true ? "warn" : "")}
+              {step(projectConfigured && !restart, "Workspace loaded", restart ? setup?.restartReason || "restart needed" : setup?.runtimeActiveProject || setup?.activeProject || "loaded", restart ? "warn" : "")}
+              {step(!!setup?.ticketsDirExists && !!setup?.indexExists, "Ticket queue", setup?.indexExists ? `${setup?.ticketsDir || "tickets"} ready` : "initialize folders")}
+              {step(supportFoldersReady, "Agent support", supportFoldersReady ? "agents and memory queue available" : "initialize folders or run setup")}
+              {step(reposReady, "Repo routing", repoDetail)}
+              {step(launchReady.length > 0, "Launch candidate", launchReady.length ? launchReady.slice(0, 3).map((t) => t.id).join(", ") : ticketList.length ? "fix status, deps, repo, or acceptance criteria" : "create a starter ticket")}
+              {step(board?.armed === false, "Safe by default", board?.armed === true ? "currently armed" : board?.armed === false ? "disarmed" : "unknown", board?.armed === true ? "warn" : "")}
             </ul>
           </HomeCard>
           <DispatchCard />
@@ -2091,12 +2195,13 @@ function ProjectsView({ active, refreshBoard, setView }: { active: boolean; refr
   function quickValues() {
     const name = (document.getElementById("projects-quick-name") as HTMLInputElement)?.value.trim() || "";
     const path = (document.getElementById("projects-quick-path") as HTMLInputElement)?.value.trim() || ".";
-    const fallback = (name || path.split("/").filter(Boolean).pop() || "default").toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
+    const fallbackSource = name || leafName(path) || selected.name || id || "default";
+    const fallback = slugProjectId(fallbackSource);
     return {
-      id: (document.getElementById("projects-quick-id") as HTMLInputElement)?.value.trim() || fallback,
+      id: fallback,
       name: name || fallback,
       workspaceDir: path,
-      ticketIdPrefix: ((document.getElementById("projects-quick-prefix") as HTMLInputElement)?.value.trim() || "DB").toUpperCase(),
+      ticketIdPrefix: inferTicketPrefix(name || fallback),
       preferredEngine: (document.getElementById("projects-quick-engine") as HTMLSelectElement)?.value || "unknown",
     };
   }
@@ -2119,6 +2224,7 @@ function ProjectsView({ active, refreshBoard, setView }: { active: boolean; refr
           workspaceDir: q.workspaceDir,
           ticketIdPrefix: q.ticketIdPrefix,
           preferredEngine: q.preferredEngine,
+          helmMateDir: setup?.helmMateDir,
         }),
       });
       const body = await res.json().catch(() => ({}));
@@ -2235,30 +2341,48 @@ function ProjectsView({ active, refreshBoard, setView }: { active: boolean; refr
     : "none";
   const reposOk = repoRows.length > 0 && repoRows.every((repo: AnyObj) => repo.exists !== false);
   const setupRows = [
-    ["Setup status API", !!setup?.configPath, setup?.configPath ? "loaded from /api/setup/status" : "not loaded"],
-    ["Config path", !!setup?.configPath, setup?.configPath || "unknown"],
-    ["Active project match", !mismatch, mismatch ? `${setup?.configuredActiveProject} selected, ${setup?.runtimeActiveProject} running` : setup?.runtimeActiveProject || setup?.activeProject || "unknown"],
+    ["Project config", !!setup?.configPath, setup?.configPath || "unknown"],
+    ["Runtime project", !mismatch, mismatch ? `${setup?.configuredActiveProject} selected, ${setup?.runtimeActiveProject} running` : setup?.runtimeActiveProject || setup?.activeProject || "unknown"],
     ["Server restart", !setup?.requiresRestart, setup?.requiresRestart ? "needed to load the selected active project" : "not needed", setup?.requiresRestart ? "warn" : ""],
-    ["Tickets directory", !!setup?.ticketsDirExists, setup?.ticketsDir || "not configured"],
-    ["Ticket index", !!setup?.indexExists, setup?.indexExists ? "_index.json exists" : "missing or will be created"],
-    ["Configured repos", reposOk, repoDetail],
+    ["Ticket queue", !!setup?.ticketsDirExists && !!setup?.indexExists, setup?.indexExists ? `${setup?.ticketsDir || "tickets"} ready` : setup?.ticketsDir || "not configured"],
+    ["Repo routing", reposOk, repoDetail],
     ["Board armed", boardState?.armed === false, boardState?.armed === true ? "armed" : boardState?.armed === false ? "disarmed" : "unknown", boardState?.armed === true ? "warn" : ""],
     ["Autopilot", boardState?.autopilot === false, boardState?.autopilot === true ? "on" : boardState?.autopilot === false ? "off" : "unknown", boardState?.autopilot === true ? "warn" : ""],
-    ["Suggested check", true, "npm run validate:tickets"],
   ];
+  const prerequisiteRows = [
+    ["Skill pack", !!setup?.skillInstallCommand, "Install once into Codex and Claude skill folders."],
+    ["Coding agent", true, "Open the target workspace in Codex or Claude Code before pasting setup prompts."],
+    ["Git workspace", reposOk, reposOk ? "Repo paths resolve from the running project config." : "Run setup or Doctor to repair repo mapping."],
+    ["Ticket validation", !!setup?.indexExists, "Run npm run validate:tickets after agent-created ticket changes."],
+    ["Launch review", boardState?.armed === false, "Keep the board disarmed until launch preview and ticket quality look right."],
+  ];
+  const readyLabel = setup?.ready && !setup?.requiresRestart && !mismatch ? "Ready" : "Needs setup";
 
   return (
     <main className="projects">
       <div className="projects-view">
         <div className="agents-header"><h2 className="agents-title">Projects</h2><button className="agents-refresh-btn" type="button" onClick={refresh}>Refresh</button></div>
         {data?.requiresRestartToSwitch ? <div className="home-breaker projects-restart"><div className="home-breaker-main"><span className="home-breaker-flag">Restart needed</span><span className="home-breaker-reason">The selected active project differs from the project currently loaded by the server.</span></div></div> : null}
-        <section className="home-card projects-guided-card" key={`guided-${id}`}><div className="home-card-head"><h3>Setup handoff</h3><span className="home-card-sub">prompt only</span></div><div className="home-card-body">
-          <div className="projects-form-grid projects-quick-grid"><ProjectField label="Project ID" id="projects-quick-id" value={id} /><ProjectField label="Name" id="projects-quick-name" value={selected.name || id} /><ProjectField label="Workspace path" id="projects-quick-path" value={selected.workspaceDir || "."} /><ProjectField label="Ticket prefix" id="projects-quick-prefix" value={selected.ticketIdPrefix || "DB"} /><ProjectEngineField value={engine} /></div>
-          <div className="projects-agent-card"><div><span className="projects-flow-kicker">Use your coding agent</span><p className="projects-agent-copy">Generate a prompt for Claude Code, Codex, or another local agent. The agent runs <code>helm-setup-project</code>, inspects the workspace, previews changes, and keeps HelmMate disarmed.</p></div><div className="projects-actions"><button className="projects-btn projects-btn--primary" type="button" onClick={() => generateSetupPrompt("existing")}>Existing repo prompt</button><button className="projects-btn" type="button" onClick={() => generateSetupPrompt("new")}>New project prompt</button><button className="projects-btn" type="button" onClick={copyAgentPrompt}>{setupPrompt ? "Copy prompt" : "Generate & copy"}</button></div></div>
+        <section className="projects-command-center">
+          <div className="projects-command-main">
+            <span className={`projects-health ${readyLabel === "Ready" ? "projects-health--ok" : ""}`}>{readyLabel}</span>
+            <h2>{selected.name || id}</h2>
+            <p>Use this page to connect a workspace, copy agent setup prompts, and verify the prerequisites before any ticket is dispatched.</p>
+          </div>
+          <div className="projects-command-grid">
+            <div><span>active</span><strong>{data?.activeProject || "none"}</strong></div>
+            <div><span>running</span><strong>{setup?.runtimeActiveProject || "none"}</strong></div>
+            <div><span>repos</span><strong>{repoRows.length || 0}</strong></div>
+            <div><span>safety</span><strong>{boardState?.armed ? "armed" : "disarmed"}</strong></div>
+          </div>
+        </section>
+        <section className="home-card projects-guided-card" key={`guided-${id}`}><div className="home-card-head"><h3>Setup handoff</h3><span className="home-card-sub">agent-assisted</span></div><div className="home-card-body">
+          <div className="projects-form-grid projects-quick-grid"><ProjectField label="Name" id="projects-quick-name" value={selected.name || id} /><ProjectField label="Workspace path" id="projects-quick-path" value={selected.workspaceDir || "."} /><ProjectEngineField value={engine} /></div>
+          <div className="projects-agent-card"><div><span className="projects-flow-kicker">Use your coding agent</span><p className="projects-agent-copy">Open Claude Code, Codex, or another local agent in the project folder. HelmMate will infer the project ID, ticket prefix, repo mapping, folders, and config defaults from the workspace.</p></div><div className="projects-actions"><button className="projects-btn projects-btn--primary" type="button" onClick={() => generateSetupPrompt("existing")}>Existing repo prompt</button><button className="projects-btn" type="button" onClick={() => generateSetupPrompt("new")}>No project yet prompt</button><button className="projects-btn" type="button" onClick={copyAgentPrompt}>{setupPrompt ? "Copy prompt" : "Generate & copy"}</button></div></div>
           {setupPrompt ? <div className="projects-prompt-wrap"><label className="projects-label" htmlFor="projects-setup-prompt">Generated prompt</label><textarea className="projects-textarea projects-prompt" id="projects-setup-prompt" rows={16} readOnly value={setupPrompt} /></div> : null}
-          <p className="projects-note">This handoff is side-effect free. The setup agent should inspect read-only first, preview intended changes, preserve unrelated project entries, validate tickets, then suggest HelmMate Doctor as the follow-up check.</p><span className="projects-status">{status}</span>
+          <p className="projects-note">The handoff prompt includes this HelmMate folder path and tells the agent to preserve unrelated config, preview changes, validate tickets, and keep the board disarmed.</p><span className="projects-status">{status}</span>
         </div></section>
-        <section className="home-card projects-setup-card"><div className="home-card-head"><h3>Readiness Doctor</h3><span className="home-card-sub">{setup?.ready && !setup?.requiresRestart && !mismatch ? "basic checks pass" : "check before arming"}</span></div><div className="home-card-body"><ul className="projects-steps">{setupRows.map(([label, ok, detail, tone]: any[]) => <li key={label} className={`${ok ? "projects-step projects-step--done" : "projects-step"}${tone ? ` projects-step--${tone}` : ""}`}><span className="projects-step-dot" /><span className="projects-step-main">{label}</span><span className="projects-step-detail">{detail || "not configured"}</span></li>)}</ul><p className="projects-note">These are lightweight UI checks. Run Doctor with your coding agent for git auth, CLI, worktree, prompt, persona, PR, and process readiness. {setup?.requiresRestart ? setup?.restartReason || "Restart the server to load updated project paths." : ""}</p><div className="projects-actions"><button className="projects-btn" type="button" onClick={refresh}>Refresh status</button><button className="projects-btn projects-btn--primary" onClick={initializeProject}>Initialize folders</button><button className="projects-btn projects-btn--primary" type="button" onClick={() => generateDoctorPrompt(false)}>Run Doctor prompt</button><button className="projects-btn" type="button" onClick={copyDoctorPrompt}>{doctorPrompt ? "Copy Doctor prompt" : "Generate & copy Doctor"}</button><input className="projects-input projects-starter-input" id="projects-starter-title" defaultValue="First HelmMate ticket" /><button className="projects-btn" onClick={createStarterTicket}>Create starter ticket</button></div>{doctorPrompt ? <div className="projects-prompt-wrap"><label className="projects-label" htmlFor="projects-doctor-prompt">Doctor prompt</label><textarea className="projects-textarea projects-prompt projects-doctor-prompt" id="projects-doctor-prompt" rows={14} readOnly value={doctorPrompt} /></div> : null}<span className="projects-status">{doctorStatus}</span></div></section>
+        <section className="home-card projects-setup-card"><div className="home-card-head"><h3>Readiness Doctor</h3><span className="home-card-sub">{setup?.ready && !setup?.requiresRestart && !mismatch ? "basic checks pass" : "check before arming"}</span></div><div className="home-card-body"><div className="projects-doctor-grid"><ul className="projects-steps">{setupRows.map(([label, ok, detail, tone]: any[]) => <li key={label} className={`${ok ? "projects-step projects-step--done" : "projects-step"}${tone ? ` projects-step--${tone}` : ""}`}><span className="projects-step-dot" /><span className="projects-step-main">{label}</span><span className="projects-step-detail">{detail || "not configured"}</span></li>)}</ul><ul className="projects-steps projects-prereqs">{prerequisiteRows.map(([label, ok, detail]: any[]) => <li key={label} className={ok ? "projects-step projects-step--done" : "projects-step"}><span className="projects-step-dot" /><span className="projects-step-main">{label}</span><span className="projects-step-detail">{detail}</span></li>)}</ul></div><p className="projects-note">UI checks catch local config drift. Doctor asks your coding agent to verify git auth, installed CLIs, worktree mode, prompt files, personas, PR readiness, and process safety. {setup?.requiresRestart ? setup?.restartReason || "Restart the server to load updated project paths." : ""}</p><div className="projects-actions"><button className="projects-btn" type="button" onClick={refresh}>Refresh status</button><button className="projects-btn projects-btn--primary" onClick={initializeProject}>Initialize folders</button><button className="projects-btn projects-btn--primary" type="button" onClick={() => generateDoctorPrompt(false)}>Generate Doctor prompt</button><button className="projects-btn" type="button" onClick={copyDoctorPrompt}>{doctorPrompt ? "Copy Doctor prompt" : "Generate & copy Doctor"}</button><input className="projects-input projects-starter-input" id="projects-starter-title" defaultValue="First HelmMate ticket" /><button className="projects-btn" onClick={createStarterTicket}>Create starter ticket</button></div>{doctorPrompt ? <div className="projects-prompt-wrap"><label className="projects-label" htmlFor="projects-doctor-prompt">Doctor prompt</label><textarea className="projects-textarea projects-prompt projects-doctor-prompt" id="projects-doctor-prompt" rows={14} readOnly value={doctorPrompt} /></div> : null}<span className="projects-status">{doctorStatus}</span></div></section>
         <div className="projects-grid">
           <section className="home-card projects-list-card"><div className="home-card-head"><h3>Project registry</h3></div><div className="home-card-body"><div className="projects-list">{ids.map((pid) => <button key={pid} className={`projects-list-item${pid === id ? " projects-list-item--selected" : ""}`} type="button" onClick={() => setSelectedId(pid)}><span className="projects-list-name">{data?.projects?.[pid]?.name || pid}</span><span className="projects-list-meta">{pid}{pid === data?.activeProject ? " · selected" : ""}{pid === data?.runtimeActiveProject ? " · running" : ""}</span></button>)}</div></div></section>
           <section className="home-card projects-editor-card" key={`editor-${id}`}><div className="home-card-head"><h3>Advanced config</h3><button className="projects-link-btn" type="button" onClick={() => setAdvancedOpen((v) => !v)}>{advancedOpen ? "Hide" : "Show"}</button></div><div className="home-card-body" hidden={!advancedOpen}>
@@ -2305,63 +2429,37 @@ function Onboarding({
   setView: (v: View) => void;
   showToast: (msg: string) => void;
 }) {
-  const [mode, setMode] = useState<"existing" | "new">("existing");
-  const [projectId, setProjectId] = useState("default");
-  const [projectName, setProjectName] = useState("Default");
-  const [workspaceDir, setWorkspaceDir] = useState(".");
-  const [ticketPrefix, setTicketPrefix] = useState("DB");
-  const [preferredEngine, setPreferredEngine] = useState("unknown");
-  const [starterTitle, setStarterTitle] = useState("First HelmMate ticket");
   const [setupPrompt, setSetupPrompt] = useState("");
   const [doctorPrompt, setDoctorPrompt] = useState("");
   const [status, setStatus] = useState("Checking local setup...");
-  const [saving, setSaving] = useState(false);
-  const initialized = useRef(false);
 
   useEffect(() => {
     if (!setup) refreshBoard();
   }, [setup, refreshBoard]);
 
   useEffect(() => {
-    if (initialized.current || (!setup && !config)) return;
-    const active = setup?.activeProject || config?.activeProject || "default";
-    const workspace = setup?.workspaceDir || config?.workspaceDir || ".";
-    setProjectId(active);
-    setProjectName(active === "default" ? "Default" : titleForStatus(active));
-    setWorkspaceDir(workspace);
-    setTicketPrefix(setup?.ticketIdPrefix || config?.ticketIdPrefix || "DB");
-    setPreferredEngine(config?.defaultEngine || "unknown");
-    setStatus(setup ? "Choose how HelmMate should attach to your work." : "Checking local setup...");
-    initialized.current = true;
+    setStatus(setup ? "Install the skills, copy a setup prompt, then refresh after the agent finishes." : "Checking local setup...");
   }, [setup, config]);
 
   const rows = setupRepoRows(setup);
-  const ticketCount = Number(setup?.ticketCount || 0) || tickets.length;
   const restart = !!setup?.requiresRestart || !!(setup?.configuredActiveProject && setup?.runtimeActiveProject && setup.configuredActiveProject !== setup.runtimeActiveProject);
   const hasRepos = Array.isArray(setup?.repos) && setup.repos.length > 0;
   const reposReachable = rows.length ? rows.every((repo: AnyObj) => repo.exists !== false) : hasRepos;
   const foldersReady = !!setup?.ticketsDirExists && !!setup?.indexExists && setup?.agentDirExists !== false && setup?.memoryQueueDirExists !== false;
-  const complete = onboardingComplete(setup, tickets.length);
+  const complete = onboardingComplete(setup);
   const activeStep = !setup
     ? 0
     : restart
     ? 2
-    : !setup.configPath || !hasRepos
+    : !setup.projectConfigured
     ? 1
     : !foldersReady || !reposReachable
     ? 2
-    : ticketCount <= 0
-    ? 3
-    : 4;
+    : 3;
 
   const detail = rows.length
     ? rows.map((repo: AnyObj) => `${repo.key}: ${repo.exists === true ? "ok" : repo.exists === false ? "missing" : "configured"}${repo.path ? ` (${repo.path})` : ""}`).join("; ")
     : "workspace repo will be configured";
-
-  function updateName(value: string) {
-    setProjectName(value);
-    if (projectId === "default" || projectId === slugProjectId(projectName)) setProjectId(slugProjectId(value));
-  }
 
   async function writeClipboard(text: string, success: string) {
     try {
@@ -2375,48 +2473,31 @@ function Onboarding({
     }
   }
 
-  function currentProject() {
-    const id = slugProjectId(projectId || projectName || workspaceDir);
+  async function copyInstallCommand() {
+    const command = setup?.skillInstallCommand || "";
+    if (!command) {
+      setStatus("Install command is still loading. Refresh setup status and try again.");
+      return;
+    }
+    await writeClipboard(command, "Skill install command copied.");
+  }
+
+  function promptInput(mode: "existing" | "new") {
+    const knownProject = setup?.activeProject || config?.activeProject || "";
+    const knownWorkspace = setup?.workspaceDir || config?.workspaceDir || "";
+    const defaultEngine = config?.defaultEngine || "unknown";
+    const useKnownProject = mode === "existing" && knownProject && knownProject !== "default" && knownWorkspace;
     return {
-      id,
-      name: projectName.trim() || titleForStatus(id),
-      workspaceDir: workspaceDir.trim() || ".",
-      ticketIdPrefix: ticketPrefix.trim().toUpperCase() || "DB",
-      preferredEngine,
+      id: useKnownProject ? slugProjectId(knownProject) : "",
+      name: useKnownProject ? titleForStatus(knownProject) : "",
+      workspaceDir: useKnownProject ? knownWorkspace : "the coding agent's current working directory",
+      ticketIdPrefix: useKnownProject ? inferTicketPrefix(knownProject) : "",
+      preferredEngine: defaultEngine,
     };
   }
 
-  async function saveProject() {
-    const q = currentProject();
-    setSaving(true);
-    setStatus("Saving project...");
-    try {
-      const saveRes = await fetch(`/api/projects/${encodeURIComponent(q.id)}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(projectPayload(q)),
-      });
-      const saveBody = await saveRes.json().catch(() => ({}));
-      if (!saveRes.ok) throw new Error(saveBody.error || `Save failed (${saveRes.status})`);
-      const activeRes = await fetch("/api/projects/active", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: q.id }),
-      });
-      const activeBody = await activeRes.json().catch(() => ({}));
-      if (!activeRes.ok) throw new Error(activeBody.error || `Activate failed (${activeRes.status})`);
-      setProjectId(q.id);
-      setStatus(activeBody.requiresRestart ? "Project saved. Restart the server, then refresh this page to load the new path." : "Project saved. Continue with local setup.");
-      await refreshBoard();
-    } catch (err: any) {
-      setStatus(`Could not save project: ${err.message}`);
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function generateSetupPrompt(copy = false) {
-    const q = currentProject();
+  async function generateSetupPrompt(mode: "existing" | "new", copy = false) {
+    const q = promptInput(mode);
     setStatus("Generating agent handoff...");
     try {
       const res = await fetch("/api/setup/agent-prompt", {
@@ -2429,6 +2510,7 @@ function Onboarding({
           workspaceDir: q.workspaceDir,
           ticketIdPrefix: q.ticketIdPrefix,
           preferredEngine: q.preferredEngine,
+          helmMateDir: setup?.helmMateDir,
         }),
       });
       const body = await res.json().catch(() => ({}));
@@ -2436,43 +2518,14 @@ function Onboarding({
       const prompt = body.prompt || "";
       setSetupPrompt(prompt);
       if (copy) await writeClipboard(prompt, "Setup prompt copied.");
-      else setStatus("Setup prompt generated. Review it, then hand it to your coding agent.");
+      else setStatus("Setup prompt generated. Open your project folder in the coding agent, paste it, then come back and refresh.");
     } catch (err: any) {
       setStatus(`Could not generate setup prompt: ${err.message}`);
     }
   }
 
-  async function copySetupPrompt() {
-    if (!setupPrompt) {
-      await generateSetupPrompt(true);
-      return;
-    }
-    await writeClipboard(setupPrompt, "Setup prompt copied.");
-  }
-
-  async function initializeFolders() {
-    setStatus("Initializing local folders...");
-    const res = await fetch("/api/setup/init", { method: "POST" }).catch(() => null);
-    await refreshBoard();
-    setStatus(res?.ok ? "Local folders initialized." : "Could not initialize folders. Check the server console.");
-  }
-
-  async function createStarterTicket() {
-    setStatus("Creating starter ticket...");
-    try {
-      const result = await postTicket({
-        title: starterTitle.trim() || "First HelmMate ticket",
-        repo: setup?.repos?.[0] || config?.repos?.[0] || "workspace",
-        priority: "P2",
-        status: "triage",
-        description: "Created from the HelmMate onboarding flow.",
-        acceptance_criteria: ["Ticket appears on the board", "The ticket is ready for a human review before agent launch"],
-      });
-      setStatus(`${result.ticket.id} created. HelmMate is ready.`);
-      await refreshBoard();
-    } catch (err: any) {
-      setStatus(`Could not create ticket: ${err.message}`);
-    }
+  async function copySetupPrompt(mode: "existing" | "new") {
+    await generateSetupPrompt(mode, true);
   }
 
   async function generateDoctorPrompt(copy = false) {
@@ -2492,7 +2545,7 @@ function Onboarding({
 
   async function enterWorkspace() {
     await refreshBoard();
-    if (!onboardingComplete(await getJSON("/api/setup/status"), tickets.length)) {
+    if (!onboardingComplete(await getJSON("/api/setup/status"))) {
       setStatus("A setup check is still incomplete. Refresh after any agent or server work finishes.");
       return;
     }
@@ -2516,72 +2569,53 @@ function Onboarding({
           <span className="brand-name">HelmMate</span>
         </div>
         <span className="onboarding-kicker">First run</span>
-        <h1>Set up your AI development cockpit.</h1>
-        <p className="onboarding-copy">Connect a project folder, let your coding agent verify the workspace, create the first reviewed ticket, then enter the board with launches still disarmed.</p>
-        <div className="onboarding-mode-grid" role="group" aria-label="Project setup mode">
-          <button className={`onboarding-mode${mode === "existing" ? " onboarding-mode--active" : ""}`} type="button" onClick={() => setMode("existing")}>
-            <span>Connect folder</span>
-            <small>Use an existing local repo or workspace.</small>
+        <h1>Let your coding agent wire HelmMate in.</h1>
+        <p className="onboarding-copy">Install the HelmMate skill pack once, copy one prompt, paste it into your coding agent from the project folder, then come back after validation.</p>
+        <div className="onboarding-mode-grid" role="group" aria-label="Setup prompt choices">
+          <button className="onboarding-mode" type="button" onClick={() => copySetupPrompt("existing")}>
+            <span>Copy repo setup prompt</span>
+            <small>For an existing local repo or workspace.</small>
           </button>
-          <button className={`onboarding-mode${mode === "new" ? " onboarding-mode--active" : ""}`} type="button" onClick={() => setMode("new")}>
-            <span>Start project</span>
-            <small>Prepare a fresh workspace with an agent.</small>
+          <button className="onboarding-mode" type="button" onClick={() => copySetupPrompt("new")}>
+            <span>Copy new project prompt</span>
+            <small>For asking the agent to create a starter workspace first.</small>
           </button>
         </div>
         <ul className="onboarding-steps">
-          {step(1, "Project", setup?.activeProject || "choose a folder")}
-          {step(2, "Local setup", restart ? "restart required" : foldersReady && reposReachable ? "ready" : "needs setup")}
-          {step(3, "First ticket", ticketCount ? `${ticketCount} ticket${ticketCount === 1 ? "" : "s"}` : "not created")}
-          {step(4, "Workspace", complete ? "ready to enter" : "locked")}
+          {step(1, "Skills", setup?.skillInstallCommand ? "install command ready" : "loading command")}
+          {step(2, "Agent setup", restart ? "restart required" : foldersReady && reposReachable ? "ready" : "paste prompt in project")}
+          {step(3, "Workspace", complete ? "ready to enter" : "locked")}
         </ul>
       </section>
 
       <section className="onboarding-panel" aria-label="Project setup">
         <div className="onboarding-panel-head">
           <div>
-            <span className="onboarding-panel-kicker">{complete ? "Ready" : mode === "existing" ? "Connect existing folder" : "Start new project"}</span>
-            <h2>{complete ? "Your workspace is ready." : "Complete setup before opening the board."}</h2>
+            <span className="onboarding-panel-kicker">{complete ? "Ready" : "Zero-input handoff"}</span>
+            <h2>{complete ? "Your workspace is ready." : "Copy, paste, come back."}</h2>
           </div>
           <span className={`onboarding-live${complete ? " onboarding-live--ok" : ""}`}>{complete ? "Complete" : "In setup"}</span>
         </div>
 
-        <div className="onboarding-form-grid">
-          <label className="projects-field">
-            <span className="projects-label">Project name</span>
-            <input className="projects-input" value={projectName} onChange={(e) => updateName(e.target.value)} />
-          </label>
-          <label className="projects-field">
-            <span className="projects-label">Project ID</span>
-            <input className="projects-input" value={projectId} onChange={(e) => setProjectId(slugProjectId(e.target.value))} />
-          </label>
-          <label className="projects-field onboarding-field-wide">
-            <span className="projects-label">Workspace folder</span>
-            <input className="projects-input" value={workspaceDir} onChange={(e) => setWorkspaceDir(e.target.value)} placeholder="/path/to/project" />
-          </label>
-          <label className="projects-field">
-            <span className="projects-label">Ticket prefix</span>
-            <input className="projects-input" value={ticketPrefix} onChange={(e) => setTicketPrefix(e.target.value.toUpperCase())} />
-          </label>
-          <label className="projects-field">
-            <span className="projects-label">Preferred agent</span>
-            <select className="projects-input" value={preferredEngine} onChange={(e) => setPreferredEngine(e.target.value)}>
-              <option value="unknown">Not sure yet</option>
-              <option value="claude">Claude Code</option>
-              <option value="codex">Codex</option>
-            </select>
-          </label>
+        <div className="onboarding-command-card">
+          <div>
+            <span className="projects-label">1. Install HelmMate skills globally</span>
+            <p>Run once in any terminal. It copies the local HelmMate skill pack into Claude Code and Codex global skill folders.</p>
+          </div>
+          <button className="projects-btn projects-btn--primary" type="button" onClick={copyInstallCommand}>Copy install command</button>
+          <pre className="onboarding-command"><code>{setup?.skillInstallCommand || "Loading install command..."}</code></pre>
         </div>
 
         <div className="onboarding-action-row">
-          <button className="projects-btn projects-btn--primary" type="button" onClick={saveProject} disabled={saving}>{saving ? "Saving..." : "Save project"}</button>
-          <button className="projects-btn" type="button" onClick={() => generateSetupPrompt(false)}>Generate agent prompt</button>
-          <button className="projects-btn" type="button" onClick={copySetupPrompt}>{setupPrompt ? "Copy prompt" : "Generate & copy"}</button>
+          <button className="projects-btn projects-btn--primary" type="button" onClick={() => copySetupPrompt("existing")}>Copy existing repo prompt</button>
+          <button className="projects-btn" type="button" onClick={() => copySetupPrompt("new")}>Copy new project prompt</button>
+          <button className="projects-btn" type="button" onClick={() => generateSetupPrompt("existing", false)}>Preview prompt</button>
         </div>
 
         {setupPrompt ? (
           <label className="onboarding-prompt">
-            <span className="projects-label">Setup prompt fallback</span>
-            <textarea className="projects-textarea projects-prompt" rows={9} readOnly value={setupPrompt} />
+            <span className="projects-label">2. Paste this in your coding agent from the project folder</span>
+            <textarea className="projects-textarea projects-prompt" rows={12} readOnly value={setupPrompt} />
           </label>
         ) : null}
 
@@ -2595,17 +2629,13 @@ function Onboarding({
             <li className={!restart ? "projects-step projects-step--done" : "projects-step projects-step--warn"}><span className="projects-step-dot" /><span className="projects-step-main">Runtime project</span><span className="projects-step-detail">{restart ? setup?.restartReason || "restart server to load the selected path" : setup?.runtimeActiveProject || setup?.activeProject || "loaded"}</span></li>
             <li className={foldersReady ? "projects-step projects-step--done" : "projects-step"}><span className="projects-step-dot" /><span className="projects-step-main">Folders and index</span><span className="projects-step-detail">{foldersReady ? "created" : setup?.ticketsDir || "not configured"}</span></li>
             <li className={hasRepos && reposReachable ? "projects-step projects-step--done" : "projects-step"}><span className="projects-step-dot" /><span className="projects-step-main">Repo mapping</span><span className="projects-step-detail">{detail}</span></li>
-            <li className={ticketCount > 0 ? "projects-step projects-step--done" : "projects-step"}><span className="projects-step-dot" /><span className="projects-step-main">Starter ticket</span><span className="projects-step-detail">{ticketCount ? `${ticketCount} ticket${ticketCount === 1 ? "" : "s"}` : "needed before board opens"}</span></li>
+            <li className={setup?.skillInstallCommand ? "projects-step projects-step--done" : "projects-step"}><span className="projects-step-dot" /><span className="projects-step-main">Skill install</span><span className="projects-step-detail">copy the install command once before setup prompts</span></li>
+            <li className="projects-step projects-step--warn"><span className="projects-step-dot" /><span className="projects-step-main">Doctor check</span><span className="projects-step-detail">verify git auth, CLIs, prompt files, personas, and worktree readiness before arming</span></li>
           </ul>
         </div>
 
-        <div className="onboarding-ticket-row">
-          <input className="projects-input" value={starterTitle} onChange={(e) => setStarterTitle(e.target.value)} aria-label="Starter ticket title" />
-          <button className="projects-btn projects-btn--primary" type="button" onClick={initializeFolders}>Initialize folders</button>
-          <button className="projects-btn" type="button" onClick={createStarterTicket}>Create starter ticket</button>
-        </div>
-
         <div className="onboarding-action-row onboarding-action-row--final">
+          <button className="projects-btn projects-btn--primary" type="button" onClick={refreshBoard}>I set it up. Refresh</button>
           <button className="projects-btn" type="button" onClick={() => generateDoctorPrompt(false)}>Generate Doctor prompt</button>
           <button className="projects-btn" type="button" onClick={() => doctorPrompt ? writeClipboard(doctorPrompt, "Doctor prompt copied.") : generateDoctorPrompt(true)}>{doctorPrompt ? "Copy Doctor" : "Generate & copy Doctor"}</button>
           <button className="projects-btn projects-btn--primary onboarding-enter" type="button" onClick={enterWorkspace} disabled={!complete}>Enter workspace</button>

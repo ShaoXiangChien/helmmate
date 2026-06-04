@@ -1,6 +1,6 @@
 # Open-source extraction plan
 
-Goal: turn this Plander-specific dev-board into a standalone local dashboard for
+Goal: turn this HelmMate-specific helmmate into a standalone local dashboard for
 agent-driven ticket queues: tickets -> board -> optional autonomous launch ->
 PR -> human review -> done.
 
@@ -20,11 +20,11 @@ What is already strong:
 
 What is currently too project-specific:
 
-- Paths assume the board lives at `<workspace>/dev-board` and tickets live at
+- Paths assume the board lives at `<workspace>/helmmate` and tickets live at
   `<workspace>/tickets`.
-- Repo names are hard-coded to `plander-api`, `plander-ios`, and `workspace`.
-- Ticket IDs, branches, docs, and prompts assume the `PL-NNN` Plander workflow.
-- UI branding and copy say "Plander", "Eric", "Claude ran out", etc.
+- Repo names are hard-coded to `helmmate-api`, `helmmate-ios`, and `workspace`.
+- Ticket IDs, branches, docs, and prompts assume the `PL-NNN` HelmMate workflow.
+- UI branding and copy say "HelmMate", "Eric", "Claude ran out", etc.
 - Agent personas are read from `<workspace>/.claude/agents/*.md`.
 - Memory queue is fixed to `memory/sync-queue/*.md`.
 - Launch prompts assume `scripts/work-ticket-prompt.md` and specific PR rules.
@@ -32,20 +32,20 @@ What is currently too project-specific:
 
 ## Phase 0: repo hygiene
 
-- Choose repo name. Good candidates: `dev-board`, `agent-dev-board`,
+- Choose repo name. Good candidates: `helmmate`, `agent-helmmate`,
   `local-agent-board`, or `review-gated-board`.
-- Initialize git in `/Users/ericchien/Desktop/Startup/dev-board`.
+- Initialize git in `/Users/ericchien/Desktop/Startup/helmmate`.
 - Add `LICENSE` (MIT is simplest; Apache-2.0 if patent language matters).
 - Add `SECURITY.md` explaining that the app launches local agent CLIs and should
   be treated as a local-only tool.
 - Add `CONTRIBUTING.md` with the safety model: no auto-merge, human review gate,
   triage gate, disarmed by default.
 - Replace `IMPROVEMENTS.md` with a public roadmap, preserving useful ideas but
-  removing Plander/Eric-specific phrasing.
+  removing HelmMate/Eric-specific phrasing.
 
 ## Phase 1: make it configurable
 
-Add `devboard.config.json` at the workspace root and let env vars override it.
+Add `helmmate.config.json` at the workspace root and let env vars override it.
 
 Suggested config shape:
 
@@ -88,7 +88,7 @@ Core files to add:
 
 - `schemas/ticket.schema.json`
 - `schemas/index-row.schema.json`
-- `bin/dev-board.mjs`
+- `bin/helmmate.mjs`
 - `bin/new-ticket.mjs`
 - `bin/validate-tickets.mjs`
 
@@ -111,10 +111,10 @@ for project-specific fields. The board should require only:
 Nice first command set:
 
 ```bash
-npx dev-board init
-npx dev-board new-ticket --title "Add auth smoke test" --repo workspace --priority P1
-npx dev-board validate
-npx dev-board start
+npx helmmate init
+npx helmmate new-ticket --title "Add auth smoke test" --repo workspace --priority P1
+npx helmmate validate
+npx helmmate start
 ```
 
 ## Phase 3: agent skill pack
@@ -144,7 +144,7 @@ Recommended skills:
   schema drift, stale worktrees, and unsafe arm/autopilot state.
 
 The important design choice: skills should be product-neutral. They should say
-"your project" and "human reviewer", not "Plander" or "Eric".
+"your project" and "human reviewer", not "HelmMate" or "Eric".
 
 ## Phase 4: launch engines as plugins
 
@@ -165,7 +165,7 @@ without touching board logic.
 
 ## Phase 5: public UX polish
 
-- Rename UI from "Plander Dev" to a neutral product name.
+- Rename UI from "HelmMate Dev" to a neutral product name.
 - Add first-run empty states for "no tickets yet" and "missing config".
 - Add a Settings page for config paths, repos, engines, WIP limit, and memory
   queue.
@@ -181,7 +181,7 @@ without touching board logic.
   rewrite.
 - Add a fake engine for launch tests so CI never spawns real agent CLIs.
 - Add GitHub Actions for lint/test.
-- Publish as both a GitHub repo and an npm package with a `dev-board` binary.
+- Publish as both a GitHub repo and an npm package with a `helmmate` binary.
 
 ## Generalizability gaps to solve before launch
 
@@ -213,4 +213,4 @@ Ship a small but coherent v0.1:
   templates.
 
 That version is enough for people to try the workflow without inheriting the
-whole Plander-specific operating system.
+whole HelmMate-specific operating system.

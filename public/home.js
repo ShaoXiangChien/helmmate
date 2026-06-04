@@ -8,7 +8,7 @@
   "use strict";
 
   const POLL_MS = 10000;
-  const TAB_KEY = "devboard.activeTab";
+  const TAB_KEY = "helmmate.activeTab";
 
   const home = {
     visible: false,
@@ -236,7 +236,7 @@
           acceptance_criteria: ["Ticket appears on the board"],
         }),
       });
-      if (res.ok && window.devboardSetView) window.devboardSetView("board");
+      if (res.ok && window.helmmateSetView) window.helmmateSetView("board");
     } catch {
       /* keep Home calm; the checklist will stay on the current step */
     }
@@ -1018,8 +1018,8 @@
     $("#home-create-ticket")?.addEventListener("click", (e) => createStarterTicket(e.currentTarget));
     $("#home-arm-board")?.addEventListener("click", (e) => setArmed(true, e.currentTarget));
     $("#home-refresh")?.addEventListener("click", poll);
-    $("#home-open-projects")?.addEventListener("click", () => window.devboardSetView && window.devboardSetView("projects"));
-    $("#home-open-board")?.addEventListener("click", () => window.devboardSetView && window.devboardSetView("board"));
+    $("#home-open-projects")?.addEventListener("click", () => window.helmmateSetView && window.helmmateSetView("projects"));
+    $("#home-open-board")?.addEventListener("click", () => window.helmmateSetView && window.helmmateSetView("board"));
 
     root.querySelectorAll(".home-ci-fix").forEach((b) => {
       b.addEventListener("click", () =>
@@ -1121,7 +1121,7 @@
     setView(initial, { persist: false });
   }
 
-  window.devboardSetView = setView;
+  window.helmmateSetView = setView;
 
   // Pause polling when the whole tab/window is hidden (battery friendly).
   document.addEventListener("visibilitychange", () => {

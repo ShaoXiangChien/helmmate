@@ -25,7 +25,7 @@ npm run validate:tickets
 npm start
 ```
 
-Use `devboard.config.json` for local repo paths and ticket settings. Avoid
+Use `helmmate.config.json` for local repo paths and ticket settings. Avoid
 committing private tickets, logs, state files, run ledgers, usage caches, or
 worktrees.
 

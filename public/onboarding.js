@@ -3,7 +3,7 @@
 (function () {
   "use strict";
 
-  const DISMISS_PREFIX = "devboard.onboarding.dismissed.";
+  const DISMISS_PREFIX = "helmmate.onboarding.dismissed.";
   let setup = null;
 
   const $ = (sel) => document.querySelector(sel);
@@ -75,7 +75,7 @@
       dismiss();
       const refreshBtn = $("#refresh");
       if (refreshBtn) refreshBtn.click();
-      if (window.devboardSetView) window.devboardSetView("board");
+      if (window.helmmateSetView) window.helmmateSetView("board");
     } else {
       if (btn) btn.disabled = false;
     }
@@ -132,7 +132,7 @@
     $("#onboarding-create")?.addEventListener("click", (e) => createTicket(e.currentTarget));
     $("#onboarding-projects")?.addEventListener("click", () => {
       dismiss();
-      if (window.devboardSetView) window.devboardSetView("projects");
+      if (window.helmmateSetView) window.helmmateSetView("projects");
     });
   }
 

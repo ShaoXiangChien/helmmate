@@ -25,6 +25,12 @@ Use explicit user-provided values when present:
 If a value is missing, infer a conservative default from repo context and state
 the assumption in the final report.
 
+Do not ask the user to invent HelmMate internals such as project IDs, ticket
+prefixes, repo keys, status lists, folder names, or prompt paths. Infer them
+from the repo/folder and existing HelmMate config. Ask at most one clarifying
+question only when the target folder or project stack cannot be identified
+safely.
+
 ## Non-Negotiable Safety
 
 - Inspect read-only before editing.
@@ -35,13 +41,17 @@ the assumption in the final report.
 - Do not reset or discard git state.
 - Do not remove worktrees.
 - Do not switch branches unless the user explicitly asks.
-- Preserve unrelated `devboard.config.json` project entries and top-level
+- Preserve unrelated `helmmate.config.json` project entries and top-level
   defaults.
 
 ## Read-Only Inspection Checklist
 
 Confirm the HelmMate repository root and the target project workspace. They may
 be the same directory, but do not assume they are.
+
+If the prompt includes an explicit HelmMate repository path, use that path for
+`helmmate.config.json`, `skills/`, and `npm run init`. Use the target workspace
+path for repo inspection and project scaffold checks.
 
 Inspect the target workspace without changing files:
 
@@ -53,7 +63,7 @@ Inspect the target workspace without changing files:
 - likely test command
 - repo name
 - dirty working tree
-- existing `devboard.config.json`
+- existing `helmmate.config.json`
 - existing `tickets/`
 - existing `.agents/`
 - existing `memory/sync-queue/`
@@ -77,7 +87,7 @@ install, build, test, format, or migration commands during inspection.
 
 ## Config Rules
 
-Read HelmMate's `devboard.config.json` before editing. Preserve unrelated
+Read HelmMate's `helmmate.config.json` before editing. Preserve unrelated
 project entries, unknown fields, and top-level defaults unless the user
 explicitly asks to change them.
 
@@ -100,6 +110,10 @@ When adding or updating a project, write only fields needed for setup:
 Use repo key `workspace` for a simple single-repo setup unless the user or repo
 context clearly suggests another key. Set `worktree: false` for the first
 conservative setup unless the user requests worktrees.
+
+For a first-run handoff, set `activeProject` to the new/updated project unless
+the prompt explicitly says not to or the existing config clearly indicates the
+user is intentionally managing multiple projects manually.
 
 ## Conservative Defaults
 
@@ -140,6 +154,11 @@ Engine guidance:
 Package manager and test command are inspection facts for the final report. Do
 not invent a test command if none is obvious.
 
+For new-project mode, if the target workspace is missing or empty, preview a
+minimal scaffold first. Prefer the user's surrounding request and folder name for
+the stack. If no stack is inferable, create only a minimal README and HelmMate
+support scaffold rather than making an arbitrary app.
+
 ## Preview Before Editing
 
 Before writing files, show a concise preview:
@@ -170,7 +189,7 @@ npm run init
 If npm scripts are not available from the HelmMate repo root, use:
 
 ```bash
-node bin/dev-board.mjs init
+node bin/helmmate.mjs init
 ```
 
 Expected scaffold:

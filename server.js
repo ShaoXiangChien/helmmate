@@ -1,9 +1,10 @@
-// dev-board server — local kanban + auto-launch watcher.
+// helmmate server — local kanban + auto-launch watcher.
 // One dependency: express. Static front end in public/.
 import express from "express";
 import fs from "node:fs";
 import {
   AGENTS_DIR,
+  BOARD_DIR,
   CONFIG,
   HOST,
   MEMORY_QUEUE_DIR,
@@ -48,7 +49,13 @@ import {
   buildNewTicket,
 } from "./lib/tickets.js";
 import { deleteProject, listProjects, saveProject, setActiveProject } from "./lib/project-config.js";
-import { doctorAgentCommands, importNotesAgentCommands, setupAgentCommands } from "./lib/setup-agent.js";
+import {
+  buildSkillInstallCommand,
+  doctorAgentCommands,
+  firstTicketAgentCommands,
+  importNotesAgentCommands,
+  setupAgentCommands,
+} from "./lib/setup-agent.js";
 import { drainQueuedTickets, launchTicket, stopTicket } from "./lib/launcher.js";
 import { buildLaunchPreview } from "./lib/launch-preview.js";
 import { manualFix } from "./lib/ci-watch.js";
@@ -76,35 +83,39 @@ function setupStatusSnapshot() {
   const tickets = readAllTickets();
   const registry = listProjects();
   const requiresRestart = !!registry.requiresRestartToSwitch;
-  const repoStatus = Object.entries(REPOS).map(([key, repo]) => ({
+  const projectConfigured = !!registry.projectConfigured;
+  const repoStatus = projectConfigured ? Object.entries(REPOS).map(([key, repo]) => ({
     key,
     path: repo.path,
     exists: fs.existsSync(repo.path),
     baseBranch: repo.baseBranch,
     worktree: !!repo.worktree,
     role: repo.role || null,
-  }));
+  })) : [];
   return {
     configPath: CONFIG.configPath,
     activeProject: CONFIG.activeProject,
     configuredActiveProject: registry.activeProject,
     runtimeActiveProject: registry.runtimeActiveProject,
+    projectConfigured,
     requiresRestart,
     restartReason: requiresRestart
-      ? "The active project in devboard.config.json differs from the project loaded when the server started."
+      ? "The active project in helmmate.config.json differs from the project loaded when the server started."
       : "",
     workspaceDir: CONFIG.workspaceDir,
     ticketsDir: TICKETS_DIR,
     ticketsDirExists,
     indexExists,
     ticketCount: tickets.length,
-    repos: Object.keys(CONFIG.repos),
+    repos: projectConfigured ? Object.keys(CONFIG.repos) : [],
     repoStatus,
     agentDir: AGENTS_DIR,
     agentDirExists: fs.existsSync(AGENTS_DIR),
     memoryQueueDir: MEMORY_QUEUE_DIR,
     memoryQueueDirExists: fs.existsSync(MEMORY_QUEUE_DIR),
-    ready: ticketsDirExists && indexExists && REPO_KEYS.length > 0,
+    helmMateDir: BOARD_DIR,
+    skillInstallCommand: buildSkillInstallCommand(BOARD_DIR),
+    ready: projectConfigured && ticketsDirExists && indexExists && REPO_KEYS.length > 0,
   };
 }
 
@@ -256,6 +267,23 @@ app.post("/api/setup/doctor-prompt", (_req, res) => {
   res.json(doctorAgentCommands({ setup: setupStatusSnapshot(), state: publicState() }));
 });
 
+// POST /api/setup/first-ticket-prompt -> generate a prompt that asks a local
+// coding agent to create the first reviewed triage ticket via helm-create-ticket.
+app.post("/api/setup/first-ticket-prompt", (_req, res) => {
+  res.json(
+    firstTicketAgentCommands({
+      activeProject: CONFIG.activeProject,
+      workspaceDir: CONFIG.workspaceDir,
+      ticketsDir: CONFIG.ticketsDir,
+      ticketIdPrefix: CONFIG.ticketIdPrefix,
+      repos: REPO_KEYS,
+      statuses: CONFIG.statuses,
+      defaultRepo: REPO_KEYS[0] || "workspace",
+      helmMateDir: BOARD_DIR,
+    })
+  );
+});
+
 // POST /api/import/notes-prompt -> generate a prompt that hands pasted notes to
 // helm-create-ticket. The browser only copies text; the user's coding agent
 // does the actual ticket creation and validation.
@@ -285,7 +313,7 @@ app.post("/api/import/notes-prompt", (req, res) => {
   );
 });
 
-// GET /api/projects -> project registry from devboard.config.json.
+// GET /api/projects -> project registry from helmmate.config.json.
 app.get("/api/projects", (_req, res) => {
   res.json(listProjects());
 });
@@ -709,7 +737,7 @@ app.post("/api/arm", (req, res) => {
 });
 
 const server = app.listen(PORT, HOST, () => {
-  console.log(`dev-board running at http://${HOST}:${PORT}`);
+  console.log(`helmmate running at http://${HOST}:${PORT}`);
   console.log(`board state: ${JSON.stringify(publicState())}`);
   // Install the usage-aware continuous scheduler. Inert unless armed AND
   // autopilot are both on (autopilot defaults false), so this is safe to start
