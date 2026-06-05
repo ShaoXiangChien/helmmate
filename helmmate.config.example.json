@@ -24,7 +24,7 @@
       "fixConflictPrompt": "scripts/fix-conflict-prompt.md",
       "engines": {
         "default": "claude",
-        "allowed": ["claude", "codex"]
+        "allowed": ["claude", "codex", "opencode"]
       },
       "roles": {
         "cross-repo": { "model": "sonnet" },

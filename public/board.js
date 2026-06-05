@@ -11,7 +11,7 @@ let COLUMNS = [
 ];
 
 let VALID_REPOS = new Set(["workspace"]);
-let ENGINES = ["claude", "codex"];
+let ENGINES = ["claude", "codex", "opencode"];
 
 const state = {
   tickets: [],
@@ -78,6 +78,13 @@ function titleForStatus(status) {
     .filter(Boolean)
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ");
+}
+
+function engineLabel(engine) {
+  if (engine === "claude") return "Claude";
+  if (engine === "codex") return "Codex";
+  if (engine === "opencode") return "OpenCode";
+  return titleForStatus(engine);
 }
 
 async function loadConfig() {
@@ -302,7 +309,7 @@ async function setBoardDefaultEngine(engine) {
     });
     if (!res.ok) throw new Error(`engine set failed (${res.status})`);
     state.board = await res.json();
-    toast(`Default engine → ${engine}`);
+    toast(`Default engine → ${engineLabel(engine)}`);
   } catch (err) {
     toast(err.message);
     await loadBoardState();
@@ -338,8 +345,9 @@ function renderHeader() {
   if (engineBtn) {
     const def = boardDefaultEngine();
     const label = engineBtn.querySelector(".engine-label");
-    if (label) label.textContent = titleForStatus(def);
+    if (label) label.textContent = engineLabel(def);
     engineBtn.classList.toggle("engine-toggle--codex", def === "codex");
+    engineBtn.classList.toggle("engine-toggle--opencode", def === "opencode");
   }
 }
 
@@ -367,6 +375,35 @@ const CODEX_EFFORT_BY_ROLE = {
 };
 const CODEX_MODELS = ["gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex", "gpt-5.3-codex-spark", "gpt-5.2"];
 const CODEX_EFFORTS = ["low", "medium", "high", "xhigh"];
+const OPENCODE_MODEL_BY_ROLE = {
+  "ios-engineer": "opencode-go/minimax-m2.7",
+  "backend-engineer": "opencode-go/minimax-m2.7",
+  "cross-repo": "opencode-go/qwen3.7-plus",
+  "architect": "opencode-go/qwen3.7-max",
+};
+const OPENCODE_VARIANT_BY_ROLE = {
+  "ios-engineer": "",
+  "backend-engineer": "",
+  "cross-repo": "",
+  "architect": "",
+};
+const OPENCODE_MODELS = [
+  "opencode-go/minimax-m2.7",
+  "opencode-go/minimax-m2.5",
+  "opencode-go/minimax-m3",
+  "opencode-go/qwen3.7-plus",
+  "opencode-go/qwen3.7-max",
+  "opencode-go/qwen3.6-plus",
+  "opencode-go/kimi-k2.6",
+  "opencode-go/kimi-k2.5",
+  "opencode-go/deepseek-v4-pro",
+  "opencode-go/deepseek-v4-flash",
+  "opencode-go/glm-5.1",
+  "opencode-go/glm-5",
+  "opencode-go/mimo-v2.5-pro",
+  "opencode-go/mimo-v2.5",
+];
+const OPENCODE_VARIANTS = ["minimal", "low", "medium", "high", "max"];
 function resolveRole(t) {
   if (t && t.role && ROLE_MODEL[t.role]) return t.role;
   return (t && ROLE_BY_REPO[t.repo]) || "cross-repo";
@@ -383,12 +420,34 @@ function codexEffort(t) {
   if (t && CODEX_EFFORTS.includes(t.codex_effort)) return t.codex_effort;
   return CODEX_EFFORT_BY_ROLE[resolveRole(t)] || "medium";
 }
+function opencodeModel(t) {
+  if (t && OPENCODE_MODELS.includes(t.opencode_model)) return t.opencode_model;
+  return OPENCODE_MODEL_BY_ROLE[resolveRole(t)] || "opencode-go/minimax-m2.7";
+}
+function opencodeVariant(t) {
+  if (t && OPENCODE_VARIANTS.includes(t.opencode_variant)) return t.opencode_variant;
+  return OPENCODE_VARIANT_BY_ROLE[resolveRole(t)] || "";
+}
 function shortCodexModel(model) {
   return String(model || "").replace(/^gpt-/, "");
+}
+function shortOpenCodeModel(model) {
+  return String(model || "").replace(/^opencode-go\//, "");
 }
 function roleTag(t) {
   const role = resolveRole(t);
   const derived = !(t && t.role);
+  if (resolveEngine(t) === "opencode") {
+    const model = opencodeModel(t);
+    const variant = opencodeVariant(t);
+    const modelSource = t && t.opencode_model ? "ticket override" : "role default";
+    const variantSource = t && t.opencode_variant ? "ticket override" : "role default";
+    const title =
+      `agent: ${role}${derived ? " (derived from repo)" : " (explicit)"} · ` +
+      `opencode model: ${model} (${modelSource})` +
+      `${variant ? ` · variant: ${variant} (${variantSource})` : ""}`;
+    return `<span class="tag tag-role tag-role--opencode" title="${escapeHtml(title)}">${escapeHtml(role)} · ${escapeHtml(shortOpenCodeModel(model))}${variant ? `/${escapeHtml(variant)}` : ""}</span>`;
+  }
   if (resolveEngine(t) === "codex") {
     const model = codexModel(t);
     const effort = codexEffort(t);
@@ -413,10 +472,11 @@ function resolveEngine(t) {
   if (t && ENGINES.includes(t.engine)) return t.engine;
   return boardDefaultEngine();
 }
-// A chip when Codex is active or when the ticket differs from the board default.
+// A chip when a non-Claude engine is active or when the ticket differs from the
+// board default.
 function engineTag(t) {
   const engine = resolveEngine(t);
-  if (engine !== "codex" && engine === boardDefaultEngine()) return "";
+  if (engine === "claude" && engine === boardDefaultEngine()) return "";
   const pinned = !!(t && ENGINES.includes(t.engine));
   const title = `engine: ${engine}${pinned ? " (pinned on ticket)" : " (board default)"}`;
   return `<span class="tag tag-engine tag-engine--${engine}" title="${escapeHtml(title)}">${escapeHtml(engine)}</span>`;
@@ -441,6 +501,7 @@ function previewIssues(items, emptyText) {
 function launchPreviewText(p) {
   if (!p) return "";
   const effort = p.effort ? `${p.effort.name} (${p.effort.source})` : "n/a";
+  const variant = p.variant ? `${p.variant.name || "none"} (${p.variant.source})` : "n/a";
   const worktree = p.worktree || {};
   const prompt = p.promptFile || {};
   const role = p.role || {};
@@ -460,6 +521,7 @@ function launchPreviewText(p) {
     `engine: ${p.engine?.name || "unknown"} (${p.engine?.source || "unknown"})`,
     `model: ${p.model?.name || "unknown"} (${p.model?.source || "unknown"})`,
     `effort: ${effort}`,
+    `variant: ${variant}`,
     `role: ${role.name || "unknown"} (${role.mode || "unknown"})`,
     `persona: ${role.personaPath || "unknown"} (${role.personaExists ? "exists" : "missing"})`,
     `command: ${command.summary || "unknown"}`,
@@ -488,11 +550,13 @@ function renderLaunchPreview(preview) {
   const role = preview.role || {};
   const command = preview.command || {};
   const effort = preview.effort ? `${preview.effort.name} (${preview.effort.source})` : "n/a";
+  const variant = preview.variant ? `${preview.variant.name || "none"} (${preview.variant.source})` : "n/a";
 
   mount.innerHTML = `
     ${previewLine("engine", `${preview.engine?.name || "unknown"} (${preview.engine?.source || "unknown"})`)}
     ${previewLine("model", `${preview.model?.name || "unknown"} (${preview.model?.source || "unknown"})`)}
     ${previewLine("effort", effort)}
+    ${previewLine("variant", variant)}
     ${previewLine("role", `${role.name || "unknown"} (${role.mode || "unknown"})`)}
     ${previewLine("persona", `${role.personaPath || "unknown"} (${role.personaExists ? "exists" : "missing"})`)}
     ${previewLine("cwd", preview.cwd)}
@@ -546,10 +610,6 @@ async function copyLaunchPreview(id) {
 
 function firstRepo() {
   return Array.from(VALID_REPOS)[0] || "workspace";
-}
-
-async function createBoardStarterTicket() {
-  openCreateTicketPanel();
 }
 
 function defaultImportDraft() {
@@ -609,48 +669,22 @@ async function copyImportNotesPrompt(btn) {
   if (btn) btn.disabled = false;
 }
 
-async function copyBoardSetupPrompt() {
-  try {
-    const res = await fetch("/api/setup/agent-prompt", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        mode: "existing",
-        projectId: state.config?.activeProject || "default",
-        name: state.config?.activeProject || "Default",
-        workspaceDir: state.config?.workspaceDir || ".",
-        ticketIdPrefix: state.config?.ticketIdPrefix || "DB",
-        preferredEngine: state.config?.defaultEngine || "unknown",
-      }),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(data.error || `Prompt failed (${res.status})`);
-    await navigator.clipboard.writeText(data.prompt || "");
-    toast("Setup prompt copied");
-  } catch (err) {
-    toast(`Could not copy setup prompt: ${err.message}`);
-  }
-}
-
 function boardEmptyStateHtml() {
   return `
     <section class="board-empty" aria-label="Board empty state">
       <div class="board-empty-main">
-        <span class="board-empty-kicker">No tickets yet</span>
-        <h1>Start with a reviewed first ticket.</h1>
+        <span class="board-empty-kicker">Readiness first</span>
+        <h1>Prepare the workspace before the board fills in.</h1>
         <p>
-          HelmMate is disarmed by default. Connect an existing repo, create a small starter ticket,
-          or copy the setup prompt before any agent work can run.
+          Home shows the setup checks, repo state, and next safe action. Return here once
+          HelmMate has a project and reviewed tickets to operate on.
         </p>
       </div>
       <div class="board-empty-actions">
-        <button class="board-empty-btn board-empty-btn--primary" type="button" data-board-action="projects">
-          Connect existing repo
+        <button class="board-empty-btn board-empty-btn--primary" type="button" data-board-action="home">
+          Open Home Readiness
         </button>
-        <button class="board-empty-btn" type="button" data-board-action="create-ticket">Create ticket</button>
-        <button class="board-empty-btn" type="button" data-board-action="import-notes">Import from notes</button>
-        <button class="board-empty-btn" type="button" data-board-action="copy-setup">Copy setup prompt</button>
-        <button class="board-empty-btn" type="button" data-board-action="doctor">Run doctor</button>
+        <button class="board-empty-btn" type="button" data-board-action="projects">Open Projects</button>
       </div>
     </section>`;
 }
@@ -674,24 +708,12 @@ function wireBoardEmptyActions() {
   document.querySelectorAll("[data-board-action]").forEach((btn) => {
     btn.addEventListener("click", () => {
       const action = btn.getAttribute("data-board-action");
+      if (action === "home") {
+        if (window.helmmateSetView) window.helmmateSetView("home");
+        return;
+      }
       if (action === "projects") {
         if (window.helmmateSetView) window.helmmateSetView("projects");
-        return;
-      }
-      if (action === "create-ticket") {
-        createBoardStarterTicket();
-        return;
-      }
-      if (action === "copy-setup") {
-        copyBoardSetupPrompt();
-        return;
-      }
-      if (action === "import-notes") {
-        openImportNotesPanel();
-        return;
-      }
-      if (action === "doctor") {
-        toast("Doctor is not wired yet; open Projects for setup readiness");
       }
     });
   });
@@ -732,8 +754,12 @@ function renderBoard() {
   board.innerHTML = "";
 
   if (state.tickets.length === 0) {
+    board.classList.add("board--empty");
     board.insertAdjacentHTML("beforeend", boardEmptyStateHtml());
+    wireBoardEmptyActions();
+    return;
   }
+  board.classList.remove("board--empty");
 
   for (const col of COLUMNS) {
     const items = state.tickets
@@ -880,6 +906,28 @@ function codexEffortOptions(t) {
   ].join("");
 }
 
+function opencodeModelOptions(t) {
+  const roleDefault = OPENCODE_MODEL_BY_ROLE[resolveRole(t)] || "opencode-go/minimax-m2.7";
+  const current = t && OPENCODE_MODELS.includes(t.opencode_model) ? t.opencode_model : "";
+  return [
+    `<option value=""${current ? "" : " selected"}>Role default (${escapeHtml(roleDefault)})</option>`,
+    ...OPENCODE_MODELS.map(
+      (m) => `<option value="${escapeHtml(m)}"${current === m ? " selected" : ""}>${escapeHtml(m)}</option>`
+    ),
+  ].join("");
+}
+
+function opencodeVariantOptions(t) {
+  const roleDefault = OPENCODE_VARIANT_BY_ROLE[resolveRole(t)] || "none";
+  const current = t && OPENCODE_VARIANTS.includes(t.opencode_variant) ? t.opencode_variant : "";
+  return [
+    `<option value=""${current ? "" : " selected"}>Role default (${escapeHtml(roleDefault)})</option>`,
+    ...OPENCODE_VARIANTS.map(
+      (v) => `<option value="${escapeHtml(v)}"${current === v ? " selected" : ""}>${escapeHtml(v)}</option>`
+    ),
+  ].join("");
+}
+
 function defaultTicketDraft() {
   return {
     title: "",
@@ -977,7 +1025,7 @@ function importNotesPanelHtml(draft, errors = {}) {
     ${fieldErrorHtml(errors, "form")}
     <div class="panel-section import-intro">
       <p class="panel-desc">
-        Paste rough notes and copy a handoff prompt for your coding agent. The agent uses helm-create-ticket and writes triage tickets that you can review on the Board.
+        Paste rough notes and copy a handoff prompt for Claude Code, Codex, or opencode. The agent uses helm-create-ticket and writes triage tickets that you can review on the Board.
       </p>
     </div>
     <form class="ticket-form" id="import-notes-form" novalidate>
@@ -1208,10 +1256,10 @@ function openPanel(id, opts = {}) {
     <div class="panel-section">
       <h3>Engine</h3>
       <select class="panel-move" id="panel-engine" aria-label="Engine for this ticket">
-        <option value=""${!ENGINES.includes(t.engine) ? " selected" : ""}>Board default (${escapeHtml(boardDefaultEngine())})</option>
-        ${ENGINES.map((engine) => `<option value="${escapeHtml(engine)}"${t.engine === engine ? " selected" : ""}>${escapeHtml(titleForStatus(engine))}</option>`).join("")}
+        <option value=""${!ENGINES.includes(t.engine) ? " selected" : ""}>Board default (${escapeHtml(engineLabel(boardDefaultEngine()))})</option>
+        ${ENGINES.map((engine) => `<option value="${escapeHtml(engine)}"${t.engine === engine ? " selected" : ""}>${escapeHtml(engineLabel(engine))}</option>`).join("")}
       </select>
-      <p class="panel-hint">Codex runs on your ChatGPT plan — use it when Claude usage is exhausted.</p>
+      <p class="panel-hint">Codex uses your ChatGPT plan. OpenCode uses your OpenCode Go models.</p>
     </div>
 
     <div class="panel-section">
@@ -1226,6 +1274,20 @@ function openPanel(id, opts = {}) {
         ${codexEffortOptions(t)}
       </select>
       <p class="panel-hint">Used only when this ticket resolves to Codex. Empty means role default, not global config default.</p>
+    </div>
+
+    <div class="panel-section">
+      <h3>OpenCode routing</h3>
+      <div class="kv"><span class="kv-key">resolved</span><span class="kv-val">${escapeHtml(opencodeModel(t))}${opencodeVariant(t) ? ` · ${escapeHtml(opencodeVariant(t))}` : ""}</span></div>
+      <label class="panel-label" for="panel-opencode-model">Go model</label>
+      <select class="panel-move" id="panel-opencode-model" aria-label="OpenCode model for this ticket">
+        ${opencodeModelOptions(t)}
+      </select>
+      <label class="panel-label" for="panel-opencode-variant">Variant</label>
+      <select class="panel-move" id="panel-opencode-variant" aria-label="OpenCode variant for this ticket">
+        ${opencodeVariantOptions(t)}
+      </select>
+      <p class="panel-hint">Used only when this ticket resolves to OpenCode. Empty means role default and usually sends no --variant.</p>
     </div>
 
     <div class="panel-section launch-preview-section">
@@ -1328,6 +1390,7 @@ function openPanel(id, opts = {}) {
   wirePanelMove(id);
   wirePanelEngine(id);
   wirePanelCodexRouting(id);
+  wirePanelOpenCodeRouting(id);
   wireLaunchPreview(id);
   wireStopButton(id);
   wireResumeButton(id);
@@ -1381,6 +1444,30 @@ function wirePanelCodexRouting(id) {
   }
   if (effortSel) {
     effortSel.addEventListener("change", () => save("codex_effort", effortSel.value, "Codex effort"));
+  }
+}
+
+function wirePanelOpenCodeRouting(id) {
+  const modelSel = $("#panel-opencode-model");
+  const variantSel = $("#panel-opencode-variant");
+
+  async function save(field, value, label) {
+    try {
+      await patchTicket(id, { [field]: value || null });
+      toast(value ? `${id} ${label} → ${value}` : `${id} ${label} → role default`);
+    } catch (err) {
+      toast(err.message);
+    }
+    await loadTickets();
+    renderBoard();
+    if (state.openTicketId === id) openPanel(id, { keepLog: true });
+  }
+
+  if (modelSel) {
+    modelSel.addEventListener("change", () => save("opencode_model", modelSel.value, "OpenCode model"));
+  }
+  if (variantSel) {
+    variantSel.addEventListener("change", () => save("opencode_variant", variantSel.value, "OpenCode variant"));
   }
 }
 

@@ -37,7 +37,7 @@ node -e "import('./lib/paths.js').then(m=>console.log(JSON.stringify({active:m.C
    - persona/agent files exist when roles reference them
 5. Check launch dependencies only when relevant:
    - `git`
-   - configured engine binaries (`claude`, `codex`, or project-specific engines)
+   - configured engine binaries (`claude`, `codex`, or `opencode`)
    - `gh` for PR workflows
    - git auth/remotes sufficient for push/PR handoff
    - base branches exist locally or remotely

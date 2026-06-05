@@ -36,6 +36,46 @@ const CODEX_EFFORT_BY_ROLE: AnyObj = {
 };
 const CODEX_MODELS = ["gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex", "gpt-5.3-codex-spark", "gpt-5.2"];
 const CODEX_EFFORTS = ["low", "medium", "high", "xhigh"];
+const OPENCODE_MODEL_BY_ROLE: AnyObj = {
+  "ios-engineer": "opencode-go/minimax-m2.7",
+  "backend-engineer": "opencode-go/minimax-m2.7",
+  "cross-repo": "opencode-go/qwen3.7-plus",
+  architect: "opencode-go/qwen3.7-max",
+};
+const OPENCODE_VARIANT_BY_ROLE: AnyObj = {
+  "ios-engineer": null,
+  "backend-engineer": null,
+  "cross-repo": null,
+  architect: null,
+};
+const OPENCODE_MODELS = [
+  "opencode-go/minimax-m2.7",
+  "opencode-go/minimax-m2.5",
+  "opencode-go/minimax-m3",
+  "opencode-go/qwen3.7-plus",
+  "opencode-go/qwen3.7-max",
+  "opencode-go/qwen3.6-plus",
+  "opencode-go/kimi-k2.6",
+  "opencode-go/kimi-k2.5",
+  "opencode-go/deepseek-v4-pro",
+  "opencode-go/deepseek-v4-flash",
+  "opencode-go/glm-5.1",
+  "opencode-go/glm-5",
+  "opencode-go/mimo-v2.5-pro",
+  "opencode-go/mimo-v2.5",
+];
+const OPENCODE_VARIANTS = ["minimal", "low", "medium", "high", "max"];
+
+function engineLabel(engine: string) {
+  if (engine === "claude") return "Claude";
+  if (engine === "codex") return "Codex";
+  if (engine === "opencode") return "OpenCode";
+  return titleForStatus(engine);
+}
+
+function shortOpenCodeModel(model: string) {
+  return String(model || "").replace(/^opencode-go\//, "");
+}
 
 function titleForStatus(status: string) {
   return String(status || "")
@@ -228,7 +268,7 @@ function shortReason(reason: any) {
   if (!raw) return "Usage limit reached";
   const ticket = (raw.match(/(?:on|hit on)\s+([A-Za-z0-9._-]+)/i) || [])[1];
   if (/usage limit|session limit|rate limit|429/i.test(raw)) return ticket ? `Usage limit reached on ${ticket}` : "Usage limit reached";
-  if (/autopilot off/i.test(raw)) return "Autopilot is off";
+  if (/autopilot off/i.test(raw)) return "Auto-dispatch is off";
   if (/disarmed/i.test(raw)) return "Board is disarmed";
   if (/night-only/i.test(raw)) return "Waiting for night window";
   if (/live usage .*unavailable|fail-safe/i.test(raw)) return "Live usage unavailable";
@@ -248,7 +288,7 @@ function Gauge({ pct }: { pct: any }) {
   const danger = w >= 90 ? " home-bar--danger" : w >= 70 ? " home-bar--warn" : "";
   return (
     <div className={`home-bar${danger}`}>
-      <div className="home-bar-fill" style={{ width: `${w}%` }} />
+      <div className="home-bar-fill" style={{ "--fill": String(w / 100) } as React.CSSProperties} />
     </div>
   );
 }
@@ -282,25 +322,6 @@ function setupRepoRows(setup: AnyObj | null) {
   if (!setup) return [];
   if (Array.isArray(setup.repoStatus) && setup.repoStatus.length) return setup.repoStatus;
   return (setup.repos || []).map((key: string) => ({ key, exists: null, path: "" }));
-}
-
-function onboardingComplete(setup: AnyObj | null) {
-  if (!setup) return false;
-  const rows = setupRepoRows(setup);
-  const hasRepos = Array.isArray(setup.repos) && setup.repos.length > 0;
-  const reposReachable = rows.length ? rows.every((repo: AnyObj) => repo.exists !== false) : hasRepos;
-  const restart = !!setup.requiresRestart || !!(setup.configuredActiveProject && setup.runtimeActiveProject && setup.configuredActiveProject !== setup.runtimeActiveProject);
-  return Boolean(
-    setup.projectConfigured &&
-    setup.configPath &&
-    setup.ticketsDirExists &&
-    setup.indexExists &&
-    setup.agentDirExists !== false &&
-    setup.memoryQueueDirExists !== false &&
-    hasRepos &&
-    reposReachable &&
-    !restart
-  );
 }
 
 function slugProjectId(value: string) {
@@ -355,7 +376,7 @@ function projectPayload(input: AnyObj) {
     fixConflictPrompt: "scripts/fix-conflict-prompt.md",
     engines: {
       default: input.preferredEngine && input.preferredEngine !== "unknown" ? input.preferredEngine : "claude",
-      allowed: ["claude", "codex"],
+      allowed: ["claude", "codex", "opencode"],
     },
     roles: {
       "cross-repo": { model: "sonnet" },
@@ -369,9 +390,9 @@ function App() {
   const [view, setViewState] = useState<View>(() => {
     try {
       const saved = localStorage.getItem(TAB_KEY) as View | null;
-      return saved && VIEWS.includes(saved) ? saved : "board";
+      return saved && VIEWS.includes(saved) ? saved : "home";
     } catch {
-      return "board";
+      return "home";
     }
   });
   const [config, setConfig] = useState<AnyObj | null>(null);
@@ -390,13 +411,15 @@ function App() {
   const [openTicketId, setOpenTicketId] = useState<string | null>(null);
   const [creatingTicket, setCreatingTicket] = useState(false);
   const [importingNotes, setImportingNotes] = useState(false);
+  const [initialLoadComplete, setInitialLoadComplete] = useState(false);
+  const readinessEntryApplied = useRef(false);
 
   const columns = useMemo(() => {
     const statuses = Array.isArray(config?.statuses) && config.statuses.length ? config.statuses : DEFAULT_COLUMNS.map((c) => c.status);
     return statuses.map((status: string) => ({ status, title: titleForStatus(status) }));
   }, [config]);
   const validRepos = useMemo(() => new Set(Array.isArray(config?.repos) && config.repos.length ? config.repos : ["workspace"]), [config]);
-  const engines = useMemo(() => (Array.isArray(config?.engines) && config.engines.length ? config.engines : ["claude", "codex"]), [config]);
+  const engines = useMemo(() => (Array.isArray(config?.engines) && config.engines.length ? config.engines : ["claude", "codex", "opencode"]), [config]);
   const roleByRepo = useMemo(() => config?.roleByRepo || { workspace: "cross-repo" }, [config]);
   const roleModel = useMemo(() => {
     if (!config?.roles) return { "cross-repo": "sonnet", architect: "opus" };
@@ -420,11 +443,20 @@ function App() {
 
   const refresh = useCallback(async () => {
     await Promise.all([loadConfig(), loadSetup(), loadTickets(), loadBoardState()]);
+    setInitialLoadComplete(true);
   }, [loadConfig, loadSetup, loadTickets, loadBoardState]);
 
   useEffect(() => {
     refresh();
   }, [refresh]);
+
+  useEffect(() => {
+    if (!initialLoadComplete || readinessEntryApplied.current || !setup) return;
+    readinessEntryApplied.current = true;
+    if (!setup.projectConfigured || !setup.ready || tickets.length === 0) {
+      setViewState("home");
+    }
+  }, [initialLoadComplete, setup, tickets.length]);
 
   useEffect(() => {
     const timer = window.setInterval(async () => {
@@ -459,6 +491,8 @@ function App() {
   const resolveRole = useCallback((t: AnyObj) => (t?.role && roleModel[t.role] ? t.role : roleByRepo[t?.repo] || "cross-repo"), [roleByRepo, roleModel]);
   const codexModel = useCallback((t: AnyObj) => (CODEX_MODELS.includes(t?.codex_model) ? t.codex_model : CODEX_MODEL_BY_ROLE[resolveRole(t)] || "gpt-5.4-mini"), [resolveRole]);
   const codexEffort = useCallback((t: AnyObj) => (CODEX_EFFORTS.includes(t?.codex_effort) ? t.codex_effort : CODEX_EFFORT_BY_ROLE[resolveRole(t)] || "medium"), [resolveRole]);
+  const opencodeModel = useCallback((t: AnyObj) => (OPENCODE_MODELS.includes(t?.opencode_model) ? t.opencode_model : OPENCODE_MODEL_BY_ROLE[resolveRole(t)] || "opencode-go/minimax-m2.7"), [resolveRole]);
+  const opencodeVariant = useCallback((t: AnyObj) => (OPENCODE_VARIANTS.includes(t?.opencode_variant) ? t.opencode_variant : OPENCODE_VARIANT_BY_ROLE[resolveRole(t)] || null), [resolveRole]);
 
   const depsUnmet = useCallback((ticket: AnyObj) => {
     const deps = Array.isArray(ticket.depends_on) ? ticket.depends_on : [];
@@ -520,41 +554,6 @@ function App() {
     setImportingNotes(true);
   }, []);
 
-  const copyBoardSetupPrompt = useCallback(async () => {
-    try {
-      const res = await fetch("/api/setup/agent-prompt", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          mode: "existing",
-          projectId: config?.activeProject || "default",
-          name: config?.activeProject || "Default",
-          workspaceDir: config?.workspaceDir || ".",
-          ticketIdPrefix: config?.ticketIdPrefix || "DB",
-          preferredEngine: config?.defaultEngine || "unknown",
-        }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || `Prompt failed (${res.status})`);
-      await navigator.clipboard.writeText(data.prompt || "");
-      showToast("Setup prompt copied");
-    } catch (err: any) {
-      showToast(`Could not copy setup prompt: ${err.message}`);
-    }
-  }, [config, showToast]);
-
-  const copyFirstTicketPrompt = useCallback(async () => {
-    try {
-      const res = await fetch("/api/setup/first-ticket-prompt", { method: "POST" });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || `Prompt failed (${res.status})`);
-      await navigator.clipboard.writeText(data.prompt || "");
-      showToast("First ticket prompt copied");
-    } catch (err: any) {
-      showToast(`Could not copy first ticket prompt: ${err.message}`);
-    }
-  }, [showToast]);
-
   const stopSession = useCallback(async (id: string) => {
     if (!confirm(`Stop the running session for ${id}? This kills the agent process and reverts the ticket to Backlog.`)) return;
     try {
@@ -594,7 +593,7 @@ function App() {
       const res = await fetch("/api/engine", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ engine: next }) });
       if (!res.ok) throw new Error(`engine set failed (${res.status})`);
       setBoard(await res.json());
-      showToast(`Default engine -> ${next}`);
+      showToast(`Default engine -> ${engineLabel(next)}`);
     } catch (err: any) {
       showToast(err.message);
     }
@@ -605,27 +604,10 @@ function App() {
   }, []);
 
   const openTicket = openTicketId ? byId.get(openTicketId) : null;
-  const completeOnboarding = onboardingComplete(setup);
   const readyCount = tickets.filter((ticket) => isReady(ticket)).length;
   const queuedCount = tickets.filter((ticket) => isQueued(ticket)).length;
   const runningCount = (board.running || []).length;
   const blockedCount = tickets.filter((ticket) => isBlocked(ticket)).length;
-
-  if (!completeOnboarding) {
-    return (
-      <>
-        <Onboarding
-          setup={setup}
-          config={config}
-          tickets={tickets}
-          refreshBoard={refresh}
-          setView={setView}
-          showToast={showToast}
-        />
-        {toast ? <div className="toast">{toast}</div> : null}
-      </>
-    );
-  }
 
   return (
     <>
@@ -688,8 +670,8 @@ function App() {
               </div>
 
               <div className="topbar-group topbar-group--launch" aria-label="Launch safety">
-                <button className={`ghost-btn engine-toggle${boardDefaultEngine() === "codex" ? " engine-toggle--codex" : ""}`} type="button" title="Default engine for new launches" onClick={setDefaultEngine}>
-                  Engine <span className="engine-label">{titleForStatus(boardDefaultEngine())}</span>
+                <button className={`ghost-btn engine-toggle${boardDefaultEngine() === "codex" ? " engine-toggle--codex" : ""}${boardDefaultEngine() === "opencode" ? " engine-toggle--opencode" : ""}`} type="button" title="Cycle default engine for new launches: Claude, Codex, or OpenCode" onClick={setDefaultEngine}>
+                  Engine <span className="engine-label">{engineLabel(boardDefaultEngine())}</span>
                 </button>
                 <button className={`arm ${board.armed ? "arm--on" : "arm--off"}`} type="button" aria-pressed={!!board.armed} onClick={() => setArmed(!board.armed)}>
                   <span className="arm-dot" />
@@ -718,15 +700,13 @@ function App() {
               boardDefaultEngine={boardDefaultEngine}
               codexModel={codexModel}
               codexEffort={codexEffort}
+              opencodeModel={opencodeModel}
+              opencodeVariant={opencodeVariant}
               moveTicket={moveTicket}
               openTicket={setOpenTicketId}
               stopSession={stopSession}
               resumeSession={resumeSession}
               setView={setView}
-              openImportNotes={openImportNotes}
-              copyBoardSetupPrompt={copyBoardSetupPrompt}
-              copyFirstTicketPrompt={copyFirstTicketPrompt}
-              refreshBoard={refresh}
               showToast={showToast}
             />
             {openTicket ? (
@@ -742,6 +722,8 @@ function App() {
                 boardDefaultEngine={boardDefaultEngine}
                 codexModel={codexModel}
                 codexEffort={codexEffort}
+                opencodeModel={opencodeModel}
+                opencodeVariant={opencodeVariant}
                 isSessionRunning={isSessionRunning}
                 isQueued={isQueued}
                 isSessionPaused={isSessionPaused}
@@ -797,9 +779,8 @@ function App() {
 function BoardView(props: AnyObj) {
   const {
     tickets, columns, readyOnly, isReady, isBlocked, isSessionRunning, isQueued, isSessionPaused,
-    resolveRole, roleModel, resolveEngine, boardDefaultEngine, codexModel, codexEffort,
-    moveTicket, openTicket, stopSession, resumeSession, setView, openImportNotes,
-    copyBoardSetupPrompt, copyFirstTicketPrompt, refreshBoard, showToast,
+    resolveRole, roleModel, resolveEngine, boardDefaultEngine, codexModel, codexEffort, opencodeModel, opencodeVariant,
+    moveTicket, openTicket, stopSession, resumeSession, setView, showToast,
   } = props;
 
   if (tickets.length === 0) {
@@ -807,10 +788,6 @@ function BoardView(props: AnyObj) {
       <main className="board board--empty">
         <BoardEmptyState
           setView={setView}
-          openImportNotes={openImportNotes}
-          copyBoardSetupPrompt={copyBoardSetupPrompt}
-          copyFirstTicketPrompt={copyFirstTicketPrompt}
-          refreshBoard={refreshBoard}
           showToast={showToast}
         />
       </main>
@@ -841,6 +818,8 @@ function BoardView(props: AnyObj) {
                 boardDefaultEngine={boardDefaultEngine}
                 codexModel={codexModel}
                 codexEffort={codexEffort}
+                opencodeModel={opencodeModel}
+                opencodeVariant={opencodeVariant}
                 openTicket={openTicket}
                 stopSession={stopSession}
                 resumeSession={resumeSession}
@@ -853,19 +832,20 @@ function BoardView(props: AnyObj) {
   );
 }
 
-function BoardEmptyState({ openImportNotes, copyBoardSetupPrompt, copyFirstTicketPrompt, refreshBoard }: AnyObj) {
+function BoardEmptyState({ setView }: AnyObj) {
   return (
     <section className="board-empty" aria-label="Board empty state">
       <div className="board-empty-main">
-        <span className="board-empty-kicker">No tickets yet</span>
-        <h1>Ask your agent to create the first ticket.</h1>
-        <p>Open your coding agent in the project folder, paste the HelmMate ticket prompt, and let it create a reviewed triage ticket with acceptance criteria. Come back here and refresh when it finishes.</p>
+        <span className="board-empty-kicker">Readiness first</span>
+        <h1>Prepare the workspace before the board fills in.</h1>
+        <p>
+          Home shows the setup checks, repo state, and next safe action. Return here once
+          HelmMate has a project and reviewed tickets to operate on.
+        </p>
       </div>
       <div className="board-empty-actions">
-        <button className="board-empty-btn board-empty-btn--primary" type="button" onClick={copyFirstTicketPrompt}>Copy first ticket prompt</button>
-        <button className="board-empty-btn" type="button" onClick={openImportNotes}>Use pasted notes</button>
-        <button className="board-empty-btn" type="button" onClick={refreshBoard}>I made tickets. Refresh</button>
-        <button className="board-empty-btn" type="button" onClick={copyBoardSetupPrompt}>Copy project setup prompt</button>
+        <button className="board-empty-btn board-empty-btn--primary" type="button" onClick={() => setView("home")}>Open Home Readiness</button>
+        <button className="board-empty-btn" type="button" onClick={() => setView("projects")}>Open Projects</button>
       </div>
     </section>
   );
@@ -919,13 +899,23 @@ function BoardColumn({ col, items, moveTicket, children }: AnyObj) {
   );
 }
 
-function RoleTag({ ticket, resolveRole, roleModel, resolveEngine, codexModel, codexEffort }: AnyObj) {
+function RoleTag({ ticket, resolveRole, roleModel, resolveEngine, codexModel, codexEffort, opencodeModel, opencodeVariant }: AnyObj) {
   const role = resolveRole(ticket);
   const derived = !ticket?.role;
+  if (resolveEngine(ticket) === "opencode") {
+    const model = opencodeModel(ticket);
+    const variant = opencodeVariant(ticket);
+    const modelSource = ticket?.opencode_model ? "ticket override" : "role default";
+    const variantSource = ticket?.opencode_variant ? "ticket override" : "role default";
+    const title = `agent: ${role}${derived ? " (derived from repo)" : " (explicit)"} · opencode model: ${model} (${modelSource})${variant ? ` · variant: ${variant} (${variantSource})` : ""}`;
+    return <span className="tag tag-role tag-role--opencode" title={title}>{role} · {shortOpenCodeModel(model)}{variant ? `/${variant}` : ""}</span>;
+  }
   if (resolveEngine(ticket) === "codex") {
     const model = codexModel(ticket);
     const effort = codexEffort(ticket);
-    const title = `agent: ${role}${derived ? " (derived from repo)" : " (explicit)"} · codex model: ${model} · effort: ${effort}`;
+    const modelSource = ticket?.codex_model ? "ticket override" : "role default";
+    const effortSource = ticket?.codex_effort ? "ticket override" : "role default";
+    const title = `agent: ${role}${derived ? " (derived from repo)" : " (explicit)"} · codex model: ${model} (${modelSource}) · effort: ${effort} (${effortSource})`;
     return <span className="tag tag-role tag-role--codex" title={title}>{role} · {String(model).replace(/^gpt-/, "")}/{effort}</span>;
   }
   const model = ticket?.model || roleModel[role] || "sonnet";
@@ -935,7 +925,7 @@ function RoleTag({ ticket, resolveRole, roleModel, resolveEngine, codexModel, co
 
 function EngineTag({ ticket, resolveEngine, boardDefaultEngine }: AnyObj) {
   const engine = resolveEngine(ticket);
-  if (engine !== "codex" && engine === boardDefaultEngine()) return null;
+  if (engine === "claude" && engine === boardDefaultEngine()) return null;
   const pinned = !!ticket?.engine;
   return <span className={`tag tag-engine tag-engine--${engine}`} title={`engine: ${engine}${pinned ? " (pinned on ticket)" : " (board default)"}`}>{engine}</span>;
 }
@@ -1007,6 +997,7 @@ function queuedExplanation(ticket: AnyObj) {
 function launchPreviewText(p: AnyObj) {
   if (!p) return "";
   const effort = p.effort ? `${p.effort.name} (${p.effort.source})` : "n/a";
+  const variant = p.variant ? `${p.variant.name || "none"} (${p.variant.source})` : "n/a";
   const worktree = p.worktree || {};
   const prompt = p.promptFile || {};
   const role = p.role || {};
@@ -1026,6 +1017,7 @@ function launchPreviewText(p: AnyObj) {
     `engine: ${p.engine?.name || "unknown"} (${p.engine?.source || "unknown"})`,
     `model: ${p.model?.name || "unknown"} (${p.model?.source || "unknown"})`,
     `effort: ${effort}`,
+    `variant: ${variant}`,
     `role: ${role.name || "unknown"} (${role.mode || "unknown"})`,
     `persona: ${role.personaPath || "unknown"} (${role.personaExists ? "exists" : "missing"})`,
     `command: ${command.summary || "unknown"}`,
@@ -1080,6 +1072,7 @@ function LaunchPreviewSection({ ticketId, showToast }: { ticketId: string; showT
   const prompt = preview?.promptFile || {};
   const command = preview?.command || {};
   const effort = preview?.effort ? `${preview.effort.name} (${preview.effort.source})` : "n/a";
+  const variant = preview?.variant ? `${preview.variant.name || "none"} (${preview.variant.source})` : "n/a";
 
   return (
     <div className="panel-section launch-preview-section">
@@ -1098,6 +1091,7 @@ function LaunchPreviewSection({ ticketId, showToast }: { ticketId: string; showT
             <div className="kv launch-preview-kv"><span className="kv-key">engine</span><span className="kv-val">{preview.engine?.name || "unknown"} ({preview.engine?.source || "unknown"})</span></div>
             <div className="kv launch-preview-kv"><span className="kv-key">model</span><span className="kv-val">{preview.model?.name || "unknown"} ({preview.model?.source || "unknown"})</span></div>
             <div className="kv launch-preview-kv"><span className="kv-key">effort</span><span className="kv-val">{effort}</span></div>
+            <div className="kv launch-preview-kv"><span className="kv-key">variant</span><span className="kv-val">{variant}</span></div>
             <div className="kv launch-preview-kv"><span className="kv-key">role</span><span className="kv-val">{role.name || "unknown"} ({role.mode || "unknown"})</span></div>
             <div className="kv launch-preview-kv"><span className="kv-key">persona</span><span className="kv-val">{role.personaPath || "unknown"} ({role.personaExists ? "exists" : "missing"})</span></div>
             <div className="kv launch-preview-kv"><span className="kv-key">cwd</span><span className="kv-val">{preview.cwd || "-"}</span></div>
@@ -1137,7 +1131,7 @@ function LaunchPreviewIssues({ title, items, empty }: { title: string; items: An
 function TicketPanel(props: AnyObj) {
   const {
     ticket, columns, validRepos, engines, byId, resolveRole, resolveEngine, boardDefaultEngine, codexModel,
-    codexEffort, isSessionRunning, isQueued, isSessionPaused, moveTicket, close, refresh, showToast,
+    codexEffort, opencodeModel, opencodeVariant, isSessionRunning, isQueued, isSessionPaused, moveTicket, close, refresh, showToast,
     handleLaunchResult,
     stopSession, resumeSession,
   } = props;
@@ -1232,10 +1226,10 @@ function TicketPanel(props: AnyObj) {
 
           <PanelSection title="Engine">
             <select className="panel-move" value={engines.includes(ticket.engine) ? ticket.engine : ""} onChange={(e) => savePatch({ engine: e.target.value || null }, e.target.value ? `${ticket.id} engine -> ${e.target.value}` : `${ticket.id} engine -> board default`)}>
-              <option value="">Board default ({boardDefaultEngine()})</option>
-              {engines.map((engine: string) => <option key={engine} value={engine}>{titleForStatus(engine)}</option>)}
+              <option value="">Board default ({engineLabel(boardDefaultEngine())})</option>
+              {engines.map((engine: string) => <option key={engine} value={engine}>{engineLabel(engine)}</option>)}
             </select>
-            <p className="panel-hint">Codex runs on your ChatGPT plan - use it when Claude usage is exhausted.</p>
+            <p className="panel-hint">Codex uses your ChatGPT plan. OpenCode uses your OpenCode Go models.</p>
           </PanelSection>
 
           <PanelSection title="Codex routing">
@@ -1251,6 +1245,21 @@ function TicketPanel(props: AnyObj) {
               {CODEX_EFFORTS.map((e) => <option key={e} value={e}>{e}</option>)}
             </select>
             <p className="panel-hint">Used only when this ticket resolves to Codex. Empty means role default, not global config default.</p>
+          </PanelSection>
+
+          <PanelSection title="OpenCode routing">
+            <div className="kv"><span className="kv-key">resolved</span><span className="kv-val">{opencodeModel(ticket)}{opencodeVariant(ticket) ? ` · ${opencodeVariant(ticket)}` : ""}</span></div>
+            <label className="panel-label">Go model</label>
+            <select className="panel-move" value={OPENCODE_MODELS.includes(ticket.opencode_model) ? ticket.opencode_model : ""} onChange={(e) => savePatch({ opencode_model: e.target.value || null }, e.target.value ? `${ticket.id} OpenCode model -> ${e.target.value}` : `${ticket.id} OpenCode model -> role default`)}>
+              <option value="">Role default ({OPENCODE_MODEL_BY_ROLE[resolveRole(ticket)] || "opencode-go/minimax-m2.7"})</option>
+              {OPENCODE_MODELS.map((m) => <option key={m} value={m}>{m}</option>)}
+            </select>
+            <label className="panel-label">Variant</label>
+            <select className="panel-move" value={OPENCODE_VARIANTS.includes(ticket.opencode_variant) ? ticket.opencode_variant : ""} onChange={(e) => savePatch({ opencode_variant: e.target.value || null }, e.target.value ? `${ticket.id} OpenCode variant -> ${e.target.value}` : `${ticket.id} OpenCode variant -> role default`)}>
+              <option value="">Role default ({OPENCODE_VARIANT_BY_ROLE[resolveRole(ticket)] || "none"})</option>
+              {OPENCODE_VARIANTS.map((v) => <option key={v} value={v}>{v}</option>)}
+            </select>
+            <p className="panel-hint">Used only when this ticket resolves to OpenCode. Empty means role default and usually sends no --variant.</p>
           </PanelSection>
 
           <LaunchPreviewSection ticketId={ticket.id} showToast={showToast} />
@@ -1512,7 +1521,7 @@ function ImportNotesPanel({ close, showToast }: { close: () => void; showToast: 
           <FieldError errors={errors} field="form" />
           <div className="panel-section import-intro">
             <p className="panel-desc">
-              Paste rough notes and copy a handoff prompt for your coding agent. The agent uses helm-create-ticket and writes triage tickets that you can review on the Board.
+              Paste rough notes and copy a handoff prompt for Claude Code, Codex, or opencode. The agent uses helm-create-ticket and writes triage tickets that you can review on the Board.
             </p>
           </div>
 
@@ -1673,7 +1682,7 @@ function HomeView({ active, setView }: { active: boolean; setView: (view: View) 
   const liveRuns = (runs || []).filter((r) => r?.status === "running");
   const finished = (runs || []).filter((r) => r?.status && r.status !== "running").slice(0, 8);
   const selectedEngine = (() => {
-    const allowed = Array.isArray(config?.engines) && config.engines.length ? config.engines : ["claude", "codex"];
+    const allowed = Array.isArray(config?.engines) && config.engines.length ? config.engines : ["claude", "codex", "opencode"];
     if (allowed.includes(board?.defaultEngine)) return board?.defaultEngine;
     if (allowed.includes(config?.defaultEngine)) return config?.defaultEngine;
     return "claude";
@@ -1788,6 +1797,15 @@ function HomeView({ active, setView }: { active: boolean; setView: (view: View) 
     );
   }
 
+  function OpenCodeUsageCard() {
+    return (
+      <HomeCard title="OpenCode Usage" sub="local logs">
+        <p className="home-empty home-empty--inline">OpenCode usage is tracked from completed run logs.</p>
+        <div className="home-note home-dim">Claude usage is secondary while OpenCode is the default engine.</div>
+      </HomeCard>
+    );
+  }
+
   function WeeklyCard({ quiet = false }: { quiet?: boolean }) {
     const quietClaude = quiet || selectedEngine !== "claude";
     return (
@@ -1821,7 +1839,7 @@ function HomeView({ active, setView }: { active: boolean; setView: (view: View) 
             <div className="home-dispatch-top">
               <span className={`home-pill ${!scheduler.autopilot ? "home-pill--off" : scheduler.armed ? "home-pill--on" : "home-pill--warn"}`}>{!scheduler.autopilot ? "OFF" : scheduler.armed ? "ON" : "PAUSED"}</span>
               <button type="button" className={`home-toggle ${scheduler.autopilot ? "home-toggle--on" : "home-toggle--off"}`} onClick={toggleAutopilot}>
-                <span className="home-toggle-dot" />{scheduler.autopilot ? "Autopilot ON" : "Autopilot OFF"}
+                <span className="home-toggle-dot" />{scheduler.autopilot ? "Auto-dispatch ON" : "Auto-dispatch OFF"}
               </button>
             </div>
             <div className="home-dispatch-grid">
@@ -1888,8 +1906,8 @@ function HomeView({ active, setView }: { active: boolean; setView: (view: View) 
     } else if (stage === "launch-ready") {
       const armed = !!board?.armed;
       const autopilot = !!scheduler?.autopilot;
-      lead = !armed ? "Arm the board when you want launch-ready tickets to run." : !autopilot ? "Enable autopilot to let the scheduler dispatch ready work." : "The scheduler can dispatch on its next poll.";
-      actions = <><button className="projects-btn projects-btn--primary" type="button" onClick={!armed ? armBoard : !autopilot ? toggleAutopilot : () => setView("board")}>{!armed ? "Arm board" : !autopilot ? "Enable autopilot" : "Open Board"}</button><button className="projects-btn" type="button" onClick={() => setView("board")}>Review Board</button><button className="projects-btn" type="button" onClick={poll}>Refresh</button></>;
+      lead = !armed ? "Arm the board when you want launch-ready tickets to run." : !autopilot ? "Enable auto-dispatch to let the scheduler dispatch ready work." : "The scheduler can dispatch on its next poll.";
+      actions = <><button className="projects-btn projects-btn--primary" type="button" onClick={!armed ? armBoard : !autopilot ? toggleAutopilot : () => setView("board")}>{!armed ? "Arm board" : !autopilot ? "Enable auto-dispatch" : "Open Board"}</button><button className="projects-btn" type="button" onClick={() => setView("board")}>Review Board</button><button className="projects-btn" type="button" onClick={poll}>Refresh</button></>;
     }
 
     return (
@@ -1902,7 +1920,7 @@ function HomeView({ active, setView }: { active: boolean; setView: (view: View) 
               <MetricRow label="workspace">{setup?.activeProject || config?.activeProject || "none"}</MetricRow>
               <MetricRow label="ticket queue">{fmtInt(ticketList.length)} total · {fmtInt(launchReady.length)} ready</MetricRow>
               <MetricRow label="launch safety">{board?.armed ? "armed" : "disarmed"}</MetricRow>
-              <MetricRow label="dispatcher">{scheduler?.autopilot ? "autopilot on" : "manual"}</MetricRow>
+              <MetricRow label="dispatcher">{scheduler?.autopilot ? "auto-dispatch on" : "manual"}</MetricRow>
             </div>
           </HomeCard>
           <HomeCard title="Next Actions">
@@ -1922,10 +1940,10 @@ function HomeView({ active, setView }: { active: boolean; setView: (view: View) 
           </HomeCard>
           <DispatchCard />
           <HomeCard title="Default Engine" sub="routing">
-            <div className="home-big home-big--sm"><span className="home-big-num">{selectedEngine === "codex" ? "Codex" : "Claude"}</span><span className="home-big-label">selected for launches</span></div>
-            <div className="home-note">{selectedEngine === "codex" ? "Claude usage is secondary while Codex is the default engine." : "Claude usage matters for Claude launches and scheduler caps."}</div>
+            <div className="home-big home-big--sm"><span className="home-big-num">{engineLabel(selectedEngine)}</span><span className="home-big-label">selected for launches</span></div>
+            <div className="home-note">{selectedEngine === "codex" ? "Claude usage is secondary while Codex is the default engine." : selectedEngine === "opencode" ? "Claude usage is secondary while OpenCode is the default engine." : "Claude usage matters for Claude launches and scheduler caps."}</div>
           </HomeCard>
-          {selectedEngine === "codex" ? <CodexOrBurnCard quiet /> : <BlockCard />}
+          {selectedEngine === "codex" ? <CodexOrBurnCard quiet /> : selectedEngine === "opencode" ? <OpenCodeUsageCard /> : <BlockCard />}
         </div>
       </>
     );
@@ -1939,8 +1957,8 @@ function HomeView({ active, setView }: { active: boolean; setView: (view: View) 
     <main className="home">
       <BreakerBanner />
       <div className={`home-grid${selectedEngine !== "claude" ? " home-grid--codex" : ""}`}>
-        {selectedEngine === "codex" ? <CodexOrBurnCard quiet /> : <BlockCard />}
-        {selectedEngine === "codex" ? <BlockCard quiet /> : <CodexOrBurnCard />}
+        {selectedEngine === "codex" ? <CodexOrBurnCard quiet /> : selectedEngine === "opencode" ? <OpenCodeUsageCard /> : <BlockCard />}
+        {selectedEngine === "claude" ? <CodexOrBurnCard /> : <BlockCard quiet />}
         <WeeklyCard quiet={selectedEngine !== "claude"} />
         <DispatchCard />
 
@@ -1999,11 +2017,11 @@ function AgentsView({ active }: { active: boolean }) {
         {data ? (
           <>
             <AgentsSetupOverview setup={setup} />
-            <div className="agents-editor-grid">{roles.map((agent: AnyObj) => <AgentRoleCard key={agent.role} agent={agent} usageByRole={usage.byRole || {}} codexConfig={data.codex || {}} />)}</div>
+            <div className="agents-editor-grid">{roles.map((agent: AnyObj) => <AgentRoleCard key={agent.role} agent={agent} usageByRole={usage.byRole || {}} codexConfig={data.codex || {}} opencodeConfig={data.opencode || {}} />)}</div>
             <div className="agents-spend-section">
               <SpendCard title="Spend by model" buckets={usage.byModel} kind="model" />
               <SpendCard title="Spend by role" buckets={usage.byRole} kind="role" />
-              <SpendCard title="Spend by engine" buckets={usage.byEngine} kind="engine" hint="Codex bills against your ChatGPT plan - tokens are tracked, cost shows n/a." />
+              <SpendCard title="Spend by engine" buckets={usage.byEngine} kind="engine" hint="Codex bills against your ChatGPT plan. OpenCode uses OpenCode Go model routing when selected." />
             </div>
           </>
         ) : null}
@@ -2062,6 +2080,7 @@ function AgentsSetupOverview({ setup }: { setup: AnyObj | null }) {
             </div>
             <PathRow label="Claude command" value={engine.commands?.claude} />
             <PathRow label="Codex command" value={engine.commands?.codex} />
+            <PathRow label="OpenCode command" value={engine.commands?.opencode} />
           </div>
         </section>
 
@@ -2097,6 +2116,7 @@ function AgentsSetupOverview({ setup }: { setup: AnyObj | null }) {
             <div className="agents-path-stack">
               <PathRow label="Claude flag" value={permissions.claude} />
               <PathRow label="Codex flag" value={permissions.codex} />
+              <PathRow label="OpenCode flag" value={permissions.opencode} />
               <PathRow label="Run logs" value={locations.ticketLogPattern || locations.logsDir} />
               <PathRow label="Runs ledger" value={locations.runsLedger} />
               <PathRow label="Memory proposals" value={locations.memoryProposalPattern || locations.memoryQueueDir} />
@@ -2123,7 +2143,7 @@ function SpendCard({ title, buckets, kind, hint }: AnyObj) {
   );
 }
 
-function AgentRoleCard({ agent, usageByRole, codexConfig }: AnyObj) {
+function AgentRoleCard({ agent, usageByRole, codexConfig, opencodeConfig }: AnyObj) {
   const roleUsage = usageByRole?.[agent.role];
   const persona = agent.persona || agent;
   const exists = agent.exists !== false && persona.exists !== false;
@@ -2131,6 +2151,8 @@ function AgentRoleCard({ agent, usageByRole, codexConfig }: AnyObj) {
   const claude = agent.claude || {};
   const codexModel = codexConfig.modelByRole?.[agent.role] || agent.codex?.model || "gpt-5.4-mini";
   const codexEffort = codexConfig.effortByRole?.[agent.role] || agent.codex?.effort || "medium";
+  const opencodeModel = opencodeConfig.modelByRole?.[agent.role] || agent.opencode?.model || "opencode-go/minimax-m2.7";
+  const opencodeVariant = opencodeConfig.variantByRole?.[agent.role] || agent.opencode?.variant || "default variant";
 
   return (
     <section className="home-card agents-editor-card">
@@ -2141,6 +2163,7 @@ function AgentRoleCard({ agent, usageByRole, codexConfig }: AnyObj) {
         <div className="agents-model-grid">
           <div><span>Claude model</span><strong>{claude.model || agent.model || agent.configuredModel || "sonnet"}</strong><small>{claude.source || (agent.model ? "persona frontmatter" : "role config")}</small></div>
           <div><span>Codex model</span><strong>{codexModel}</strong><small>effort {codexEffort}</small></div>
+          <div><span>OpenCode model</span><strong>{opencodeModel}</strong><small>{opencodeVariant}</small></div>
         </div>
         <PathRow label="persona" value={persona.path || agent.path} ok={exists} />
         <details className="agents-persona-details" open={exists && !!preview}>
@@ -2235,7 +2258,7 @@ function ProjectsView({ active, refreshBoard, setView }: { active: boolean; refr
         await navigator.clipboard.writeText(prompt);
         setStatus("Generated and copied setup prompt.");
       } else {
-        setStatus("Generated setup prompt. Review it, then copy it into your coding agent.");
+        setStatus("Generated setup prompt. Review it, then copy it into Claude Code, Codex, or opencode.");
       }
     } catch (err: any) {
       setStatus(`Could not generate setup prompt: ${err.message}`);
@@ -2262,7 +2285,7 @@ function ProjectsView({ active, refreshBoard, setView }: { active: boolean; refr
         await navigator.clipboard.writeText(prompt);
         setDoctorStatus("Generated and copied Doctor prompt.");
       } else {
-        setDoctorStatus("Generated Doctor prompt. Review it, then copy it into your coding agent.");
+        setDoctorStatus("Generated Doctor prompt. Review it, then copy it into Claude Code, Codex, or opencode.");
       }
     } catch (err: any) {
       setDoctorStatus(`Could not generate Doctor prompt: ${err.message}`);
@@ -2347,11 +2370,11 @@ function ProjectsView({ active, refreshBoard, setView }: { active: boolean; refr
     ["Ticket queue", !!setup?.ticketsDirExists && !!setup?.indexExists, setup?.indexExists ? `${setup?.ticketsDir || "tickets"} ready` : setup?.ticketsDir || "not configured"],
     ["Repo routing", reposOk, repoDetail],
     ["Board armed", boardState?.armed === false, boardState?.armed === true ? "armed" : boardState?.armed === false ? "disarmed" : "unknown", boardState?.armed === true ? "warn" : ""],
-    ["Autopilot", boardState?.autopilot === false, boardState?.autopilot === true ? "on" : boardState?.autopilot === false ? "off" : "unknown", boardState?.autopilot === true ? "warn" : ""],
+    ["Auto-dispatch", boardState?.autopilot === false, boardState?.autopilot === true ? "on" : boardState?.autopilot === false ? "off" : "unknown", boardState?.autopilot === true ? "warn" : ""],
   ];
   const prerequisiteRows = [
     ["Skill pack", !!setup?.skillInstallCommand, "Install once into Codex and Claude skill folders."],
-    ["Coding agent", true, "Open the target workspace in Codex or Claude Code before pasting setup prompts."],
+    ["Coding agent", true, "Open the target workspace in Claude Code, Codex, or opencode before pasting setup prompts."],
     ["Git workspace", reposOk, reposOk ? "Repo paths resolve from the running project config." : "Run setup or Doctor to repair repo mapping."],
     ["Ticket validation", !!setup?.indexExists, "Run npm run validate:tickets after agent-created ticket changes."],
     ["Launch review", boardState?.armed === false, "Keep the board disarmed until launch preview and ticket quality look right."],
@@ -2378,11 +2401,11 @@ function ProjectsView({ active, refreshBoard, setView }: { active: boolean; refr
         </section>
         <section className="home-card projects-guided-card" key={`guided-${id}`}><div className="home-card-head"><h3>Setup handoff</h3><span className="home-card-sub">agent-assisted</span></div><div className="home-card-body">
           <div className="projects-form-grid projects-quick-grid"><ProjectField label="Name" id="projects-quick-name" value={selected.name || id} /><ProjectField label="Workspace path" id="projects-quick-path" value={selected.workspaceDir || "."} /><ProjectEngineField value={engine} /></div>
-          <div className="projects-agent-card"><div><span className="projects-flow-kicker">Use your coding agent</span><p className="projects-agent-copy">Open Claude Code, Codex, or another local agent in the project folder. HelmMate will infer the project ID, ticket prefix, repo mapping, folders, and config defaults from the workspace.</p></div><div className="projects-actions"><button className="projects-btn projects-btn--primary" type="button" onClick={() => generateSetupPrompt("existing")}>Existing repo prompt</button><button className="projects-btn" type="button" onClick={() => generateSetupPrompt("new")}>No project yet prompt</button><button className="projects-btn" type="button" onClick={copyAgentPrompt}>{setupPrompt ? "Copy prompt" : "Generate & copy"}</button></div></div>
+          <div className="projects-agent-card"><div><span className="projects-flow-kicker">Use Claude Code, Codex, or opencode</span><p className="projects-agent-copy">Open Claude Code, Codex, or opencode in the project folder. HelmMate will infer the project ID, ticket prefix, repo mapping, folders, and config defaults from the workspace.</p></div><div className="projects-actions"><button className="projects-btn projects-btn--primary" type="button" onClick={() => generateSetupPrompt("existing")}>Existing repo prompt</button><button className="projects-btn" type="button" onClick={() => generateSetupPrompt("new")}>No project yet prompt</button><button className="projects-btn" type="button" onClick={copyAgentPrompt}>{setupPrompt ? "Copy prompt" : "Generate & copy"}</button></div></div>
           {setupPrompt ? <div className="projects-prompt-wrap"><label className="projects-label" htmlFor="projects-setup-prompt">Generated prompt</label><textarea className="projects-textarea projects-prompt" id="projects-setup-prompt" rows={16} readOnly value={setupPrompt} /></div> : null}
           <p className="projects-note">The handoff prompt includes this HelmMate folder path and tells the agent to preserve unrelated config, preview changes, validate tickets, and keep the board disarmed.</p><span className="projects-status">{status}</span>
         </div></section>
-        <section className="home-card projects-setup-card"><div className="home-card-head"><h3>Readiness Doctor</h3><span className="home-card-sub">{setup?.ready && !setup?.requiresRestart && !mismatch ? "basic checks pass" : "check before arming"}</span></div><div className="home-card-body"><div className="projects-doctor-grid"><ul className="projects-steps">{setupRows.map(([label, ok, detail, tone]: any[]) => <li key={label} className={`${ok ? "projects-step projects-step--done" : "projects-step"}${tone ? ` projects-step--${tone}` : ""}`}><span className="projects-step-dot" /><span className="projects-step-main">{label}</span><span className="projects-step-detail">{detail || "not configured"}</span></li>)}</ul><ul className="projects-steps projects-prereqs">{prerequisiteRows.map(([label, ok, detail]: any[]) => <li key={label} className={ok ? "projects-step projects-step--done" : "projects-step"}><span className="projects-step-dot" /><span className="projects-step-main">{label}</span><span className="projects-step-detail">{detail}</span></li>)}</ul></div><p className="projects-note">UI checks catch local config drift. Doctor asks your coding agent to verify git auth, installed CLIs, worktree mode, prompt files, personas, PR readiness, and process safety. {setup?.requiresRestart ? setup?.restartReason || "Restart the server to load updated project paths." : ""}</p><div className="projects-actions"><button className="projects-btn" type="button" onClick={refresh}>Refresh status</button><button className="projects-btn projects-btn--primary" onClick={initializeProject}>Initialize folders</button><button className="projects-btn projects-btn--primary" type="button" onClick={() => generateDoctorPrompt(false)}>Generate Doctor prompt</button><button className="projects-btn" type="button" onClick={copyDoctorPrompt}>{doctorPrompt ? "Copy Doctor prompt" : "Generate & copy Doctor"}</button><input className="projects-input projects-starter-input" id="projects-starter-title" defaultValue="First HelmMate ticket" /><button className="projects-btn" onClick={createStarterTicket}>Create starter ticket</button></div>{doctorPrompt ? <div className="projects-prompt-wrap"><label className="projects-label" htmlFor="projects-doctor-prompt">Doctor prompt</label><textarea className="projects-textarea projects-prompt projects-doctor-prompt" id="projects-doctor-prompt" rows={14} readOnly value={doctorPrompt} /></div> : null}<span className="projects-status">{doctorStatus}</span></div></section>
+        <section className="home-card projects-setup-card"><div className="home-card-head"><h3>Readiness Doctor</h3><span className="home-card-sub">{setup?.ready && !setup?.requiresRestart && !mismatch ? "basic checks pass" : "check before arming"}</span></div><div className="home-card-body"><div className="projects-doctor-grid"><ul className="projects-steps">{setupRows.map(([label, ok, detail, tone]: any[]) => <li key={label} className={`${ok ? "projects-step projects-step--done" : "projects-step"}${tone ? ` projects-step--${tone}` : ""}`}><span className="projects-step-dot" /><span className="projects-step-main">{label}</span><span className="projects-step-detail">{detail || "not configured"}</span></li>)}</ul><ul className="projects-steps projects-prereqs">{prerequisiteRows.map(([label, ok, detail]: any[]) => <li key={label} className={ok ? "projects-step projects-step--done" : "projects-step"}><span className="projects-step-dot" /><span className="projects-step-main">{label}</span><span className="projects-step-detail">{detail}</span></li>)}</ul></div><p className="projects-note">UI checks catch local config drift. Doctor asks Claude Code, Codex, or opencode to verify git auth, installed CLIs, worktree mode, prompt files, personas, PR readiness, and process safety. {setup?.requiresRestart ? setup?.restartReason || "Restart the server to load updated project paths." : ""}</p><div className="projects-actions"><button className="projects-btn" type="button" onClick={refresh}>Refresh status</button><button className="projects-btn projects-btn--primary" onClick={initializeProject}>Initialize folders</button><button className="projects-btn projects-btn--primary" type="button" onClick={() => generateDoctorPrompt(false)}>Generate Doctor prompt</button><button className="projects-btn" type="button" onClick={copyDoctorPrompt}>{doctorPrompt ? "Copy Doctor prompt" : "Generate & copy Doctor"}</button><input className="projects-input projects-starter-input" id="projects-starter-title" defaultValue="First HelmMate ticket" /><button className="projects-btn" onClick={createStarterTicket}>Create starter ticket</button></div>{doctorPrompt ? <div className="projects-prompt-wrap"><label className="projects-label" htmlFor="projects-doctor-prompt">Doctor prompt</label><textarea className="projects-textarea projects-prompt projects-doctor-prompt" id="projects-doctor-prompt" rows={14} readOnly value={doctorPrompt} /></div> : null}<span className="projects-status">{doctorStatus}</span></div></section>
         <div className="projects-grid">
           <section className="home-card projects-list-card"><div className="home-card-head"><h3>Project registry</h3></div><div className="home-card-body"><div className="projects-list">{ids.map((pid) => <button key={pid} className={`projects-list-item${pid === id ? " projects-list-item--selected" : ""}`} type="button" onClick={() => setSelectedId(pid)}><span className="projects-list-name">{data?.projects?.[pid]?.name || pid}</span><span className="projects-list-meta">{pid}{pid === data?.activeProject ? " · selected" : ""}{pid === data?.runtimeActiveProject ? " · running" : ""}</span></button>)}</div></div></section>
           <section className="home-card projects-editor-card" key={`editor-${id}`}><div className="home-card-head"><h3>Advanced config</h3><button className="projects-link-btn" type="button" onClick={() => setAdvancedOpen((v) => !v)}>{advancedOpen ? "Hide" : "Show"}</button></div><div className="home-card-body" hidden={!advancedOpen}>
@@ -2409,246 +2432,9 @@ function ProjectEngineField({ value }: { value: string }) {
         <option value="unknown">Not sure</option>
         <option value="claude">Claude Code</option>
         <option value="codex">Codex</option>
+        <option value="opencode">OpenCode</option>
       </select>
     </label>
-  );
-}
-
-function Onboarding({
-  setup,
-  config,
-  tickets,
-  refreshBoard,
-  setView,
-  showToast,
-}: {
-  setup: AnyObj | null;
-  config: AnyObj | null;
-  tickets: AnyObj[];
-  refreshBoard: () => Promise<void>;
-  setView: (v: View) => void;
-  showToast: (msg: string) => void;
-}) {
-  const [setupPrompt, setSetupPrompt] = useState("");
-  const [doctorPrompt, setDoctorPrompt] = useState("");
-  const [status, setStatus] = useState("Checking local setup...");
-
-  useEffect(() => {
-    if (!setup) refreshBoard();
-  }, [setup, refreshBoard]);
-
-  useEffect(() => {
-    setStatus(setup ? "Install the skills, copy a setup prompt, then refresh after the agent finishes." : "Checking local setup...");
-  }, [setup, config]);
-
-  const rows = setupRepoRows(setup);
-  const restart = !!setup?.requiresRestart || !!(setup?.configuredActiveProject && setup?.runtimeActiveProject && setup.configuredActiveProject !== setup.runtimeActiveProject);
-  const hasRepos = Array.isArray(setup?.repos) && setup.repos.length > 0;
-  const reposReachable = rows.length ? rows.every((repo: AnyObj) => repo.exists !== false) : hasRepos;
-  const foldersReady = !!setup?.ticketsDirExists && !!setup?.indexExists && setup?.agentDirExists !== false && setup?.memoryQueueDirExists !== false;
-  const complete = onboardingComplete(setup);
-  const activeStep = !setup
-    ? 0
-    : restart
-    ? 2
-    : !setup.projectConfigured
-    ? 1
-    : !foldersReady || !reposReachable
-    ? 2
-    : 3;
-
-  const detail = rows.length
-    ? rows.map((repo: AnyObj) => `${repo.key}: ${repo.exists === true ? "ok" : repo.exists === false ? "missing" : "configured"}${repo.path ? ` (${repo.path})` : ""}`).join("; ")
-    : "workspace repo will be configured";
-
-  async function writeClipboard(text: string, success: string) {
-    try {
-      await navigator.clipboard.writeText(text);
-      setStatus(success);
-      showToast(success);
-      return true;
-    } catch {
-      setStatus("Generated prompt. Copy it from the text area below.");
-      return false;
-    }
-  }
-
-  async function copyInstallCommand() {
-    const command = setup?.skillInstallCommand || "";
-    if (!command) {
-      setStatus("Install command is still loading. Refresh setup status and try again.");
-      return;
-    }
-    await writeClipboard(command, "Skill install command copied.");
-  }
-
-  function promptInput(mode: "existing" | "new") {
-    const knownProject = setup?.activeProject || config?.activeProject || "";
-    const knownWorkspace = setup?.workspaceDir || config?.workspaceDir || "";
-    const defaultEngine = config?.defaultEngine || "unknown";
-    const useKnownProject = mode === "existing" && knownProject && knownProject !== "default" && knownWorkspace;
-    return {
-      id: useKnownProject ? slugProjectId(knownProject) : "",
-      name: useKnownProject ? titleForStatus(knownProject) : "",
-      workspaceDir: useKnownProject ? knownWorkspace : "the coding agent's current working directory",
-      ticketIdPrefix: useKnownProject ? inferTicketPrefix(knownProject) : "",
-      preferredEngine: defaultEngine,
-    };
-  }
-
-  async function generateSetupPrompt(mode: "existing" | "new", copy = false) {
-    const q = promptInput(mode);
-    setStatus("Generating agent handoff...");
-    try {
-      const res = await fetch("/api/setup/agent-prompt", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          mode,
-          projectId: q.id,
-          name: q.name,
-          workspaceDir: q.workspaceDir,
-          ticketIdPrefix: q.ticketIdPrefix,
-          preferredEngine: q.preferredEngine,
-          helmMateDir: setup?.helmMateDir,
-        }),
-      });
-      const body = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(body.error || `Prompt failed (${res.status})`);
-      const prompt = body.prompt || "";
-      setSetupPrompt(prompt);
-      if (copy) await writeClipboard(prompt, "Setup prompt copied.");
-      else setStatus("Setup prompt generated. Open your project folder in the coding agent, paste it, then come back and refresh.");
-    } catch (err: any) {
-      setStatus(`Could not generate setup prompt: ${err.message}`);
-    }
-  }
-
-  async function copySetupPrompt(mode: "existing" | "new") {
-    await generateSetupPrompt(mode, true);
-  }
-
-  async function generateDoctorPrompt(copy = false) {
-    setStatus("Generating Doctor prompt...");
-    try {
-      const res = await fetch("/api/setup/doctor-prompt", { method: "POST" });
-      const body = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(body.error || `Prompt failed (${res.status})`);
-      const prompt = body.prompt || "";
-      setDoctorPrompt(prompt);
-      if (copy) await writeClipboard(prompt, "Doctor prompt copied.");
-      else setStatus("Doctor prompt generated.");
-    } catch (err: any) {
-      setStatus(`Could not generate Doctor prompt: ${err.message}`);
-    }
-  }
-
-  async function enterWorkspace() {
-    await refreshBoard();
-    if (!onboardingComplete(await getJSON("/api/setup/status"))) {
-      setStatus("A setup check is still incomplete. Refresh after any agent or server work finishes.");
-      return;
-    }
-    setView("board");
-  }
-
-  const step = (idx: number, label: string, value: string) => (
-    <li className={`onboarding-step${activeStep > idx ? " onboarding-step--done" : ""}${activeStep === idx ? " onboarding-step--active" : ""}`}>
-      <span className="onboarding-dot" />
-      <span className="onboarding-step-label">{label}</span>
-      <span className="onboarding-step-detail">{value}</span>
-    </li>
-  );
-
-  return (
-    <main className="onboarding" aria-label="HelmMate onboarding">
-      <div className="onboarding-bg" />
-      <section className="onboarding-hero">
-        <div className="onboarding-brand">
-          <span className="brand-mark" />
-          <span className="brand-name">HelmMate</span>
-        </div>
-        <span className="onboarding-kicker">First run</span>
-        <h1>Let your coding agent wire HelmMate in.</h1>
-        <p className="onboarding-copy">Install the HelmMate skill pack once, copy one prompt, paste it into your coding agent from the project folder, then come back after validation.</p>
-        <div className="onboarding-mode-grid" role="group" aria-label="Setup prompt choices">
-          <button className="onboarding-mode" type="button" onClick={() => copySetupPrompt("existing")}>
-            <span>Copy repo setup prompt</span>
-            <small>For an existing local repo or workspace.</small>
-          </button>
-          <button className="onboarding-mode" type="button" onClick={() => copySetupPrompt("new")}>
-            <span>Copy new project prompt</span>
-            <small>For asking the agent to create a starter workspace first.</small>
-          </button>
-        </div>
-        <ul className="onboarding-steps">
-          {step(1, "Skills", setup?.skillInstallCommand ? "install command ready" : "loading command")}
-          {step(2, "Agent setup", restart ? "restart required" : foldersReady && reposReachable ? "ready" : "paste prompt in project")}
-          {step(3, "Workspace", complete ? "ready to enter" : "locked")}
-        </ul>
-      </section>
-
-      <section className="onboarding-panel" aria-label="Project setup">
-        <div className="onboarding-panel-head">
-          <div>
-            <span className="onboarding-panel-kicker">{complete ? "Ready" : "Zero-input handoff"}</span>
-            <h2>{complete ? "Your workspace is ready." : "Copy, paste, come back."}</h2>
-          </div>
-          <span className={`onboarding-live${complete ? " onboarding-live--ok" : ""}`}>{complete ? "Complete" : "In setup"}</span>
-        </div>
-
-        <div className="onboarding-command-card">
-          <div>
-            <span className="projects-label">1. Install HelmMate skills globally</span>
-            <p>Run once in any terminal. It copies the local HelmMate skill pack into Claude Code and Codex global skill folders.</p>
-          </div>
-          <button className="projects-btn projects-btn--primary" type="button" onClick={copyInstallCommand}>Copy install command</button>
-          <pre className="onboarding-command"><code>{setup?.skillInstallCommand || "Loading install command..."}</code></pre>
-        </div>
-
-        <div className="onboarding-action-row">
-          <button className="projects-btn projects-btn--primary" type="button" onClick={() => copySetupPrompt("existing")}>Copy existing repo prompt</button>
-          <button className="projects-btn" type="button" onClick={() => copySetupPrompt("new")}>Copy new project prompt</button>
-          <button className="projects-btn" type="button" onClick={() => generateSetupPrompt("existing", false)}>Preview prompt</button>
-        </div>
-
-        {setupPrompt ? (
-          <label className="onboarding-prompt">
-            <span className="projects-label">2. Paste this in your coding agent from the project folder</span>
-            <textarea className="projects-textarea projects-prompt" rows={12} readOnly value={setupPrompt} />
-          </label>
-        ) : null}
-
-        <div className="onboarding-readiness">
-          <div className="onboarding-readiness-head">
-            <span>Readiness</span>
-            <button className="projects-link-btn" type="button" onClick={refreshBoard}>Refresh</button>
-          </div>
-          <ul className="projects-steps">
-            <li className={setup?.configPath ? "projects-step projects-step--done" : "projects-step"}><span className="projects-step-dot" /><span className="projects-step-main">Project config</span><span className="projects-step-detail">{setup?.configPath || "not loaded"}</span></li>
-            <li className={!restart ? "projects-step projects-step--done" : "projects-step projects-step--warn"}><span className="projects-step-dot" /><span className="projects-step-main">Runtime project</span><span className="projects-step-detail">{restart ? setup?.restartReason || "restart server to load the selected path" : setup?.runtimeActiveProject || setup?.activeProject || "loaded"}</span></li>
-            <li className={foldersReady ? "projects-step projects-step--done" : "projects-step"}><span className="projects-step-dot" /><span className="projects-step-main">Folders and index</span><span className="projects-step-detail">{foldersReady ? "created" : setup?.ticketsDir || "not configured"}</span></li>
-            <li className={hasRepos && reposReachable ? "projects-step projects-step--done" : "projects-step"}><span className="projects-step-dot" /><span className="projects-step-main">Repo mapping</span><span className="projects-step-detail">{detail}</span></li>
-            <li className={setup?.skillInstallCommand ? "projects-step projects-step--done" : "projects-step"}><span className="projects-step-dot" /><span className="projects-step-main">Skill install</span><span className="projects-step-detail">copy the install command once before setup prompts</span></li>
-            <li className="projects-step projects-step--warn"><span className="projects-step-dot" /><span className="projects-step-main">Doctor check</span><span className="projects-step-detail">verify git auth, CLIs, prompt files, personas, and worktree readiness before arming</span></li>
-          </ul>
-        </div>
-
-        <div className="onboarding-action-row onboarding-action-row--final">
-          <button className="projects-btn projects-btn--primary" type="button" onClick={refreshBoard}>I set it up. Refresh</button>
-          <button className="projects-btn" type="button" onClick={() => generateDoctorPrompt(false)}>Generate Doctor prompt</button>
-          <button className="projects-btn" type="button" onClick={() => doctorPrompt ? writeClipboard(doctorPrompt, "Doctor prompt copied.") : generateDoctorPrompt(true)}>{doctorPrompt ? "Copy Doctor" : "Generate & copy Doctor"}</button>
-          <button className="projects-btn projects-btn--primary onboarding-enter" type="button" onClick={enterWorkspace} disabled={!complete}>Enter workspace</button>
-        </div>
-        {doctorPrompt ? (
-          <label className="onboarding-prompt">
-            <span className="projects-label">Doctor prompt fallback</span>
-            <textarea className="projects-textarea projects-prompt projects-doctor-prompt" rows={7} readOnly value={doctorPrompt} />
-          </label>
-        ) : null}
-        <p className="onboarding-status" role="status">{status}</p>
-      </section>
-    </main>
   );
 }
 

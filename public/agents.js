@@ -154,6 +154,7 @@
           </div>
           ${pathLine("Claude command", engine.commands && engine.commands.claude)}
           ${pathLine("Codex command", engine.commands && engine.commands.codex)}
+          ${pathLine("OpenCode command", engine.commands && engine.commands.opencode)}
         </div>
       </section>`;
 
@@ -208,6 +209,7 @@
           <div class="agents-path-stack">
             ${pathLine("Claude flag", permissions.claude)}
             ${pathLine("Codex flag", permissions.codex)}
+            ${pathLine("OpenCode flag", permissions.opencode)}
             ${pathLine("Run logs", locations.ticketLogPattern || locations.logsDir)}
             ${pathLine("Runs ledger", locations.runsLedger)}
             ${pathLine("Memory proposals", locations.memoryProposalPattern || locations.memoryQueueDir)}
@@ -266,11 +268,13 @@
   }
 
   // One read-only agent card
-  function agentCard(agent, usageByRole, codexConfig) {
+  function agentCard(agent, usageByRole, codexConfig, opencodeConfig) {
     const role = agent.role || "unknown";
     const roleUsage = usageByRole && usageByRole[role] ? usageByRole[role] : null;
     const codexModel = codexConfig && codexConfig.modelByRole ? codexConfig.modelByRole[role] : null;
     const codexEffort = codexConfig && codexConfig.effortByRole ? codexConfig.effortByRole[role] : null;
+    const opencodeModel = opencodeConfig && opencodeConfig.modelByRole ? opencodeConfig.modelByRole[role] : null;
+    const opencodeVariant = opencodeConfig && opencodeConfig.variantByRole ? opencodeConfig.variantByRole[role] : null;
     const setupRole = agent.persona ? agent : null;
     const persona = setupRole ? setupRole.persona : agent;
     const exists = agent.exists !== false && (!persona || persona.exists !== false);
@@ -300,6 +304,11 @@
               <span>Codex model</span>
               <strong>${esc(codexModel || (agent.codex && agent.codex.model) || "gpt-5.4-mini")}</strong>
               <small>effort ${esc(codexEffort || (agent.codex && agent.codex.effort) || "medium")}</small>
+            </div>
+            <div>
+              <span>OpenCode model</span>
+              <strong>${esc(opencodeModel || (agent.opencode && agent.opencode.model) || "opencode-go/minimax-m2.7")}</strong>
+              <small>${esc(opencodeVariant || (agent.opencode && agent.opencode.variant) || "default variant")}</small>
             </div>
           </div>
 
@@ -385,6 +394,7 @@
     const byModel = usage.byModel || {};
     const byEngine = usage.byEngine || {};
     const codexConfig = data && data.codex ? data.codex : {};
+    const opencodeConfig = data && data.opencode ? data.opencode : {};
 
     const spendSection = `
       <div class="agents-spend-section">
@@ -410,14 +420,14 @@
           </div>
           <div class="home-card-body">
             ${spendTable(byEngine, "engine")}
-            <p class="panel-hint">Codex bills against your ChatGPT plan — tokens are tracked, cost shows n/a.</p>
+            <p class="panel-hint">Codex bills against your ChatGPT plan. OpenCode uses OpenCode Go model routing when selected.</p>
           </div>
         </section>
       </div>`;
 
     const editorsHtml = agentList.length
       ? `<div class="agents-editor-grid">
-           ${(setupRoles || agentList).map((a) => agentCard(a, byRole, codexConfig)).join("")}
+           ${(setupRoles || agentList).map((a) => agentCard(a, byRole, codexConfig, opencodeConfig)).join("")}
          </div>`
       : `<p class="home-empty">No agents found. <span class="home-na">/api/agents</span> returned an empty list.</p>`;
 

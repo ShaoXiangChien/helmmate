@@ -6,7 +6,7 @@ description: Set up or update a HelmMate project configuration and local scaffol
 # HelmMate Setup Project
 
 This skill is the handoff contract for external coding agents such as Claude
-Code, Codex, or another local repo agent. The HelmMate UI may only provide user
+Code, Codex, or opencode. The HelmMate UI may only provide user
 intent; this skill performs the repo inspection, previews intended changes, then
 updates config and local scaffold files when appropriate.
 
@@ -139,7 +139,7 @@ answer:
   "workPrompt": "scripts/work-ticket-prompt.md",
   "fixCiPrompt": "scripts/fix-ci-prompt.md",
   "fixConflictPrompt": "scripts/fix-conflict-prompt.md",
-  "engines": { "default": "claude", "allowed": ["claude", "codex"] }
+  "engines": { "default": "claude", "allowed": ["claude", "codex", "opencode"] }
 }
 ```
 
@@ -147,9 +147,10 @@ Engine guidance:
 
 - If the user named `claude`, set default engine to `claude`.
 - If the user named `codex`, set default engine to `codex`.
+- If the user named `opencode`, set default engine to `opencode`.
 - If unknown, prefer an existing configured default; otherwise use `claude`.
-- Keep `allowed` broad enough for both `claude` and `codex` unless the user asks
-  to restrict engines.
+- Keep `allowed` broad enough for `claude`, `codex`, and `opencode` unless the
+  user asks to restrict engines.
 
 Package manager and test command are inspection facts for the final report. Do
 not invent a test command if none is obvious.

@@ -533,8 +533,13 @@ body::before {
   border-color: rgba(129, 140, 248, 0.42);
   background: rgba(129, 140, 248, 0.12);
 }
-/* which engine (CLI) works the ticket — only shown when it differs from the
-   board default (mirror of lib/engine.js). Codex = the bills-separately path. */
+.tag-role--opencode {
+  color: #b8f7a7;
+  border-color: rgba(111, 224, 96, 0.42);
+  background: rgba(111, 224, 96, 0.12);
+}
+/* which engine (CLI) works the ticket — shown for non-Claude engines or ticket
+   overrides (mirror of lib/engine.js). */
 .tag-engine {
   font-family: var(--mono);
   text-transform: lowercase;
@@ -549,7 +554,12 @@ body::before {
   border-color: rgba(47, 255, 208, 0.32);
   background: rgba(47, 255, 208, 0.08);
 }
-/* topbar default-engine toggle: tinted purple when defaulting to Codex */
+.tag-engine--opencode {
+  color: #9be06b;
+  border-color: rgba(111, 224, 96, 0.42);
+  background: rgba(111, 224, 96, 0.12);
+}
+/* topbar default-engine toggle: tinted by selected non-Claude engine */
 .engine-toggle .engine-label {
   margin-left: 6px;
   font-weight: 700;
@@ -558,6 +568,11 @@ body::before {
   color: #b48cff;
   border-color: rgba(180, 140, 255, 0.5);
   background: rgba(180, 140, 255, 0.12);
+}
+.engine-toggle--opencode {
+  color: #9be06b;
+  border-color: rgba(111, 224, 96, 0.5);
+  background: rgba(111, 224, 96, 0.12);
 }
 
 .sortable-ghost { opacity: 0.35; }

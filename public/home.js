@@ -306,7 +306,7 @@
     const danger = w >= 90 ? " home-bar--danger" : w >= 70 ? " home-bar--warn" : "";
     return `
       <div class="home-bar${danger}">
-        <div class="home-bar-fill" style="width:${w}%"></div>
+        <div class="home-bar-fill" style="--fill:${w / 100}"></div>
       </div>`;
   }
 
@@ -321,7 +321,7 @@
     if (/usage limit|session limit|rate limit|429/i.test(raw)) {
       return ticket ? `Usage limit reached on ${ticket}` : "Usage limit reached";
     }
-    if (/autopilot off/i.test(raw)) return "Autopilot is off";
+    if (/autopilot off/i.test(raw)) return "Auto-dispatch is off";
     if (/disarmed/i.test(raw)) return "Board is disarmed";
     if (/night-only/i.test(raw)) return "Waiting for night window";
     if (/live usage .*unavailable|fail-safe/i.test(raw)) return "Live usage unavailable";
@@ -340,12 +340,19 @@
   }
 
   function selectedEngine() {
-    const allowed = home.config && Array.isArray(home.config.engines) ? home.config.engines : ["claude", "codex"];
+    const allowed = home.config && Array.isArray(home.config.engines) ? home.config.engines : ["claude", "codex", "opencode"];
     const stateEngine = home.state && home.state.defaultEngine;
     const configEngine = home.config && home.config.defaultEngine;
     if (allowed.includes(stateEngine)) return stateEngine;
     if (allowed.includes(configEngine)) return configEngine;
     return "claude";
+  }
+
+  function engineLabel(engine) {
+    if (engine === "claude") return "Claude";
+    if (engine === "codex") return "Codex";
+    if (engine === "opencode") return "OpenCode";
+    return String(engine || "Claude");
   }
 
   function hasRunHistory() {
@@ -614,7 +621,7 @@
     const stateClass = !autopilot ? "home-pill--off" : pausedReason ? "home-pill--warn" : "home-pill--on";
 
     const toggleClass = autopilot ? "home-toggle home-toggle--on" : "home-toggle home-toggle--off";
-    const toggleLabel = autopilot ? "Autopilot ON" : "Autopilot OFF";
+    const toggleLabel = autopilot ? "Auto-dispatch ON" : "Auto-dispatch OFF";
 
     const mode = s.mode === "night" ? "Night" : s.mode === "day" ? "Day" : "—";
     const cap = num(s.activeCapPct) != null ? fmtFractionPct(s.activeCapPct) : "—";
@@ -925,10 +932,10 @@
       lead = !armed
         ? "Arm the board when you want launch-ready tickets to run."
         : !autopilot
-        ? "Enable autopilot to let the scheduler dispatch ready work."
+        ? "Enable auto-dispatch to let the scheduler dispatch ready work."
         : "The scheduler can dispatch on its next poll.";
       buttons = [
-        !armed ? actionButton("home-arm-board", "Arm board", true) : !autopilot ? actionButton("home-autopilot-ready", "Enable autopilot", true) : actionButton("home-open-board", "Open Board", true),
+        !armed ? actionButton("home-arm-board", "Arm board", true) : !autopilot ? actionButton("home-autopilot-ready", "Enable auto-dispatch", true) : actionButton("home-open-board", "Open Board", true),
         actionButton("home-open-board", "Review Board"),
         actionButton("home-refresh", "Refresh"),
       ];
@@ -942,17 +949,28 @@
   }
 
   function renderReadinessUsage(r) {
-    const engineLabel = r.engine === "codex" ? "Codex" : "Claude";
+    const label = engineLabel(r.engine);
     const usageCard = r.engine === "codex"
       ? renderBurnCard({ quietUnavailable: true })
+      : r.engine === "opencode"
+      ? card("OpenCode Usage", `
+          <p class="home-empty home-empty--inline">OpenCode usage is tracked from completed run logs.</p>
+          <div class="home-note home-dim">Claude usage is secondary while OpenCode is the default engine.</div>
+        `, { sub: "local logs" })
       : renderBlockCard();
     return `
       ${card("Default Engine", `
         <div class="home-big home-big--sm">
-          <span class="home-big-num">${esc(engineLabel)}</span>
+          <span class="home-big-num">${esc(label)}</span>
           <span class="home-big-label">selected for launches</span>
         </div>
-        <div class="home-note">${r.engine === "codex" ? "Claude usage is secondary while Codex is the default engine." : "Claude usage matters for Claude launches and scheduler caps."}</div>
+        <div class="home-note">${
+          r.engine === "codex"
+            ? "Claude usage is secondary while Codex is the default engine."
+            : r.engine === "opencode"
+            ? "Claude usage is secondary while OpenCode is the default engine."
+            : "Claude usage matters for Claude launches and scheduler caps."
+        }</div>
       `, { sub: "routing" })}
       ${usageCard}`;
   }
@@ -1105,19 +1123,31 @@
     }
   }
 
-  function initTabs() {
+  async function initialView() {
+    let saved = "";
+    try {
+      saved = localStorage.getItem(TAB_KEY) || "";
+    } catch {
+      /* ignore */
+    }
+
+    try {
+      const setup = await getJSON("/api/setup/status");
+      const needsReadiness = setup && (!setup.projectConfigured || !setup.ready || setup.ticketCount === 0);
+      if (needsReadiness) return "home";
+    } catch {
+      /* fall back to saved/default */
+    }
+
+    return VIEWS.includes(saved) ? saved : "home";
+  }
+
+  async function initTabs() {
     document.querySelectorAll(".side-tab").forEach((btn) => {
       btn.addEventListener("click", () => setView(btn.getAttribute("data-view")));
     });
 
-    // Default to Board to avoid surprising the user; remember last tab.
-    let initial = "board";
-    try {
-      const saved = localStorage.getItem(TAB_KEY);
-      if (VIEWS.includes(saved)) initial = saved;
-    } catch {
-      /* ignore */
-    }
+    const initial = await initialView();
     setView(initial, { persist: false });
   }
 

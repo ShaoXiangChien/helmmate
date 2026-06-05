@@ -35,8 +35,17 @@ import {
   getBreaker,
   clearBreaker,
 } from "./lib/state.js";
-import { CODEX_COMMAND, ENGINES } from "./lib/engine.js";
-import { CODEX_EFFORT_BY_ROLE, CODEX_EFFORTS, CODEX_MODEL_BY_ROLE, CODEX_MODELS } from "./lib/roles.js";
+import { CODEX_COMMAND, ENGINES, OPENCODE_COMMAND } from "./lib/engine.js";
+import {
+  CODEX_EFFORT_BY_ROLE,
+  CODEX_EFFORTS,
+  CODEX_MODEL_BY_ROLE,
+  CODEX_MODELS,
+  OPENCODE_MODEL_BY_ROLE,
+  OPENCODE_MODELS,
+  OPENCODE_VARIANT_BY_ROLE,
+  OPENCODE_VARIANTS,
+} from "./lib/roles.js";
 import { getRuns, reconcileRuns, usageByRoleAndModel } from "./lib/runs.js";
 import { listConfiguredAgents, writeAgent, isValidRole } from "./lib/agents-config.js";
 import { listQueue, resolveQueueItem } from "./lib/memory-queue.js";
@@ -161,6 +170,11 @@ function agentsSetupSnapshot() {
         effort: CODEX_EFFORT_BY_ROLE[agent.role] || "medium",
         source: "role default",
       },
+      opencode: {
+        model: OPENCODE_MODEL_BY_ROLE[agent.role] || "opencode-go/minimax-m2.7",
+        variant: OPENCODE_VARIANT_BY_ROLE[agent.role] || "",
+        source: "role default",
+      },
     };
   });
   const roles = new Set(agents.map((agent) => agent.role));
@@ -190,6 +204,7 @@ function agentsSetupSnapshot() {
       commands: {
         claude: "claude",
         codex: CODEX_COMMAND,
+        opencode: OPENCODE_COMMAND,
       },
     },
     roles: agents,
@@ -209,6 +224,7 @@ function agentsSetupSnapshot() {
         "Launches run with bypassed CLI permission/sandbox flags. Review the engine, role, prompt file, repo mapping, and worktree mode before arming or launching.",
       claude: "--dangerously-skip-permissions",
       codex: "--dangerously-bypass-approvals-and-sandbox",
+      opencode: "--dangerously-skip-permissions",
     },
     locations: {
       logsDir: LOGS_DIR,
@@ -256,7 +272,7 @@ app.post("/api/setup/init", (_req, res) => {
 
 // POST /api/setup/agent-prompt -> generate a setup prompt/command for a local
 // coding agent. This is intentionally prompt-only for now; the UI can copy it
-// into Codex or Claude Code without spawning a privileged process from setup.
+// into Claude Code, Codex, or opencode without spawning a privileged process.
 app.post("/api/setup/agent-prompt", (req, res) => {
   res.json(setupAgentCommands(req.body || {}));
 });
@@ -357,6 +373,10 @@ function ticketFieldFromIssue(item) {
     bad_depends_on: "depends_on",
     bad_size: "size",
     bad_source: "source",
+    bad_codex_model: "codex_model",
+    bad_codex_effort: "codex_effort",
+    bad_opencode_model: "opencode_model",
+    bad_opencode_variant: "opencode_variant",
     missing_dependency: "depends_on",
   };
   if (direct[code]) return direct[code];
@@ -440,6 +460,16 @@ app.patch("/api/tickets/:id", (req, res) => {
   }
   if (patch.codex_effort != null && patch.codex_effort !== "" && !CODEX_EFFORTS.includes(patch.codex_effort)) {
     return res.status(400).json({ error: "invalid codex_effort", allowed: CODEX_EFFORTS });
+  }
+  if (patch.opencode_model != null && patch.opencode_model !== "" && !OPENCODE_MODELS.includes(patch.opencode_model)) {
+    return res.status(400).json({ error: "invalid opencode_model", allowed: OPENCODE_MODELS });
+  }
+  if (
+    patch.opencode_variant != null &&
+    patch.opencode_variant !== "" &&
+    !OPENCODE_VARIANTS.includes(patch.opencode_variant)
+  ) {
+    return res.status(400).json({ error: "invalid opencode_variant", allowed: OPENCODE_VARIANTS });
   }
 
   const wantsLaunch = patch.status === "in_progress" && prevStatus !== "in_progress";
@@ -595,6 +625,12 @@ app.get("/api/agents", (_req, res) => {
       models: CODEX_MODELS,
       efforts: CODEX_EFFORTS,
     },
+    opencode: {
+      modelByRole: OPENCODE_MODEL_BY_ROLE,
+      variantByRole: OPENCODE_VARIANT_BY_ROLE,
+      models: OPENCODE_MODELS,
+      variants: OPENCODE_VARIANTS,
+    },
   });
 });
 
@@ -716,9 +752,9 @@ app.post("/api/breaker/reset", (_req, res) => {
   res.json(scheduler.getSchedulerStatus());
 });
 
-// POST /api/engine -> body { engine: "claude" | "codex" }. Sets the board-wide
-// default engine for tickets that don't pin their own. Flip to "codex" when
-// Claude usage is exhausted. Returns the refreshed public state.
+// POST /api/engine -> body { engine: "claude" | "codex" | "opencode" }. Sets
+// the board-wide default engine for tickets that don't pin their own. Flip to
+// "codex" or "opencode" when Claude usage is exhausted. Returns public state.
 app.post("/api/engine", (req, res) => {
   const engine = req.body && req.body.engine;
   if (!ENGINES.includes(engine)) {

@@ -18,10 +18,10 @@
           <span class="brand-name">HelmMate</span>
         </div>
         <nav class="side-nav" id="side-nav" role="tablist" aria-label="Views">
-          <button class="side-tab" id="tab-home" type="button" role="tab" aria-selected="false" data-view="home">
+          <button class="side-tab" id="tab-home" type="button" role="tab" aria-selected="true" data-view="home">
             <span class="side-tab-label">Home</span>
           </button>
-          <button class="side-tab" id="tab-board" type="button" role="tab" aria-selected="true" data-view="board">
+          <button class="side-tab" id="tab-board" type="button" role="tab" aria-selected="false" data-view="board">
             <span class="side-tab-label">Board</span>
           </button>
           <button class="side-tab" id="tab-agents" type="button" role="tab" aria-selected="false" data-view="agents">
@@ -56,7 +56,7 @@
               <span class="arm-label">Disarmed</span>
             </button>
 
-            <button id="engine-toggle" class="ghost-btn engine-toggle" type="button" title="Default engine for new launches">
+            <button id="engine-toggle" class="ghost-btn engine-toggle" type="button" title="Default engine for new launches — cycle Claude, Codex, and OpenCode">
               Engine: <span class="engine-label">Claude</span>
             </button>
 
@@ -65,12 +65,12 @@
         </header>
 
         <!-- Home view -->
-        <section class="view view-home" id="view-home" hidden role="tabpanel" aria-labelledby="tab-home">
+        <section class="view view-home" id="view-home" role="tabpanel" aria-labelledby="tab-home">
           <main class="home" id="home"></main>
         </section>
 
         <!-- Board view (existing kanban, untouched IDs) -->
-        <section class="view view-board" id="view-board" role="tabpanel" aria-labelledby="tab-board">
+        <section class="view view-board" id="view-board" hidden role="tabpanel" aria-labelledby="tab-board">
           <main class="board" id="board"></main>
 
           <!-- Side panel -->
@@ -92,13 +92,11 @@
       </div>
     </div>
 
-    <div class="onboarding" id="onboarding" hidden></div>
     <div class="toast" id="toast" hidden></div>
 
     <script src="board.js"></script>
     <script src="agents.js"></script>
     <script src="projects.js"></script>
     <script src="home.js"></script>
-    <script src="onboarding.js"></script>
   </body>
 </html>

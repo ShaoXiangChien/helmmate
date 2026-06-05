@@ -146,7 +146,7 @@
         await navigator.clipboard.writeText(projects.setupPrompt);
         setStatus("Generated and copied setup prompt.", "ok");
       } else {
-        setStatus("Generated setup prompt. Review it, then copy it into your coding agent.", "ok");
+        setStatus("Generated setup prompt. Review it, then copy it into Claude Code, Codex, or opencode.", "ok");
       }
     } catch (err) {
       setStatus(`Could not generate setup prompt: ${err.message}`, "bad");
@@ -178,7 +178,7 @@
         await navigator.clipboard.writeText(projects.doctorPrompt);
         setDoctorStatus("Generated and copied Doctor prompt.", "ok");
       } else {
-        setDoctorStatus("Generated Doctor prompt. Review it, then copy it into your coding agent.", "ok");
+        setDoctorStatus("Generated Doctor prompt. Review it, then copy it into Claude Code, Codex, or opencode.", "ok");
       }
     } catch (err) {
       setDoctorStatus(`Could not generate Doctor prompt: ${err.message}`, "bad");
@@ -341,11 +341,11 @@
             ${step(!!s.indexExists, "Ticket index", s.indexExists ? "_index.json exists" : "missing or will be created")}
             ${step(reposOk, "Configured repos", repoDetail)}
             ${step(board.armed === false, "Board armed", board.armed === true ? "armed" : board.armed === false ? "disarmed" : "unknown", board.armed === true ? "warn" : "")}
-            ${step(board.autopilot === false, "Autopilot", board.autopilot === true ? "on" : board.autopilot === false ? "off" : "unknown", board.autopilot === true ? "warn" : "")}
+            ${step(board.autopilot === false, "Auto-dispatch", board.autopilot === true ? "on" : board.autopilot === false ? "off" : "unknown", board.autopilot === true ? "warn" : "")}
             ${step(true, "Suggested check", "npm run validate:tickets")}
           </ul>
           <p class="projects-note">
-            These are lightweight UI checks. Run Doctor with your coding agent for git auth, CLI, worktree, prompt, persona, PR, and process readiness.
+            These are lightweight UI checks. Run Doctor with Claude Code, Codex, or opencode for git auth, CLI, worktree, prompt, persona, PR, and process readiness.
             ${restart ? esc(s.restartReason || "Restart the server to load updated project paths.") : ""}
           </p>
           <div class="projects-actions">
@@ -388,9 +388,9 @@
           </div>
           <div class="projects-agent-card">
             <div>
-              <span class="projects-flow-kicker">Use your coding agent</span>
+              <span class="projects-flow-kicker">Use Claude Code, Codex, or opencode</span>
               <p class="projects-agent-copy">
-                Generate a prompt for Claude Code, Codex, or another local agent. The agent runs
+                Generate a prompt for Claude Code, Codex, or opencode. The agent runs
                 <code>helm-setup-project</code>, inspects the workspace, previews changes, and keeps HelmMate disarmed.
               </p>
             </div>
@@ -482,6 +482,7 @@
           ${option("unknown", "Not sure")}
           ${option("claude", "Claude Code")}
           ${option("codex", "Codex")}
+          ${option("opencode", "OpenCode")}
         </select>
       </label>`;
   }
